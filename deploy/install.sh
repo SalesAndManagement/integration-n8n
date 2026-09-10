@@ -105,8 +105,8 @@ if [[ ! -f "$STACK_DIR/.env" ]]; then
   REDIS_PASS=$(openssl rand -hex 24)
   ENC_KEY=$(openssl rand -hex 32)
   # size postgres/redis to available RAM
-  PG_SHARED=$(( RAM_MB / 4 ))M
-  PG_CACHE=$(( RAM_MB * 3 / 4 ))M
+  PG_SHARED=$(( RAM_MB / 4 ))MB
+  PG_CACHE=$(( RAM_MB * 3 / 4 ))MB
   REDIS_MAX=$(( RAM_MB / 8 ))mb
   NODE_HEAP=$(( RAM_MB / 4 ))
   CPUS=$(nproc)
