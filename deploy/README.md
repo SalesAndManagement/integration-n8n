@@ -67,3 +67,34 @@ cd /opt/n8n
 sed -i 's/^N8N_VERSION=.*/N8N_VERSION=1.90.2/' .env   # пінити версію
 docker compose pull && docker compose up -d
 ```
+
+## Траблшутинг
+
+### `no pg_hba.conf entry for host ... no encryption`
+
+Постгрес упав під час первинної ініціалізації (найчастіше — невалідне значення
+в `PG_*` змінних), тому `initdb` створив каталог даних, але не встиг дописати
+правила доступу і створити базу. Наступні запуски бачать непорожній каталог,
+пишуть `Skipping initialization` і працюють з напівготовим станом.
+
+Спочатку виправ причину падіння (`docker compose logs postgres`), потім скинь том:
+
+```bash
+cd /opt/n8n
+docker compose down
+docker volume rm n8n_pg_data     # перевір ім'я через docker volume ls
+docker compose up -d
+```
+
+**Том можна видаляти тільки якщо n8n жодного разу не стартував.** Якщо в базі вже
+є воркфлоу — спочатку зніми дамп із `./backups` або через `pg_dump`.
+
+### `invalid value for parameter "shared_buffers"`
+
+Postgres приймає одиниці `B`, `kB`, `MB`, `GB`, `TB` — не `M`/`G`. Перевір
+`PG_SHARED_BUFFERS` і `PG_EFFECTIVE_CACHE` в `.env`.
+
+### `getaddrinfo EAI_AGAIN postgres`
+
+Наслідок, а не причина: контейнер `postgres` перезапускається і його імені немає
+в DNS докер-мережі. Дивись `docker compose logs postgres`.
