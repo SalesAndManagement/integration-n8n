@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # n8n production installer for a fresh Debian/Ubuntu VPS (Contabo & co), run as root.
 #   bash install.sh n8n.example.com you@example.com
+#   bash install.sh auto you@example.com   # no domain yet: derive one from the public IP
 set -euo pipefail
 
 DOMAIN="${1:-}"
@@ -9,10 +10,20 @@ STACK_DIR="${STACK_DIR:-/opt/n8n}"
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 [[ $EUID -eq 0 ]] || { echo "run as root"; exit 1; }
-[[ -n "$DOMAIN" ]] || { echo "usage: bash install.sh <domain> <email>"; exit 1; }
-[[ -n "$ACME_EMAIL" ]] || { echo "usage: bash install.sh <domain> <email>"; exit 1; }
+[[ -n "$DOMAIN" ]] || { echo "usage: bash install.sh <domain|auto> <email>"; exit 1; }
+[[ -n "$ACME_EMAIL" ]] || { echo "usage: bash install.sh <domain|auto> <email>"; exit 1; }
 
 log() { echo -e "\n\033[1;32m==> $*\033[0m"; }
+
+# No domain yet? sslip.io resolves <anything>.<ip-with-dashes>.sslip.io to that IP,
+# so Let's Encrypt can still issue a real certificate. Swap DOMAIN in .env later.
+if [[ "$DOMAIN" == "auto" ]]; then
+  PUBLIC_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
+  [[ -n "${PUBLIC_IP:-}" ]] || PUBLIC_IP="$(curl -fsS --max-time 10 https://api.ipify.org || true)"
+  [[ -n "${PUBLIC_IP:-}" ]] || { echo "cannot determine the public IP; pass a domain explicitly"; exit 1; }
+  DOMAIN="n8n.${PUBLIC_IP//./-}.sslip.io"
+  log "no domain given, using $DOMAIN"
+fi
 
 # ---------- 1. base system ----------
 log "system packages"

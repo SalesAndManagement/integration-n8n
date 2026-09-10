@@ -30,6 +30,35 @@ bash /opt/n8n-src/deploy/install.sh n8n.example.com you@example.com
 
 Стек ставиться в `/opt/n8n`. Секрети — в `/opt/n8n/.env` (chmod 600).
 
+### Без домену
+
+Якщо домену ще немає, передай `auto` замість імені:
+
+```bash
+bash deploy/install.sh auto you@example.com
+```
+
+Скрипт визначить публічний IP сервера і збере адресу виду
+`n8n.37-60-231-103.sslip.io`. Сервіс sslip.io резолвить будь-яке таке ім'я
+в закодований у ньому IP, тому Let's Encrypt видає на нього справжній
+сертифікат — HTTPS і OAuth-креденшели працюють одразу, без DNS-записів.
+
+Коли з'явиться реальний домен — постав A-запис на IP (див. `DNS.md`) і заміни
+адресу в `.env`:
+
+```bash
+cd /opt/n8n
+D=n8n.example.com
+sed -i "s|^DOMAIN=.*|DOMAIN=$D|" .env
+sed -i "s|^N8N_HOST=.*|N8N_HOST=$D|" .env
+sed -i "s|^N8N_EDITOR_BASE_URL=.*|N8N_EDITOR_BASE_URL=https://$D|" .env
+sed -i "s|^WEBHOOK_URL=.*|WEBHOOK_URL=https://$D/|" .env
+docker compose up -d
+```
+
+Caddy візьме новий сертифікат сам. Врахуй, що URL уже створених вебхуків
+зміняться — їх треба переоновити в зовнішніх сервісах.
+
 > **`N8N_ENCRYPTION_KEY` треба зберегти окремо.** Без нього збережені креденшели
 > не розшифруються після переустановки.
 
