@@ -1,0 +1,40 @@
+{
+	email {$ACME_EMAIL:admin@example.com}
+	servers {
+		timeouts {
+			read_body 10m
+			write 10m
+			idle 10m
+		}
+	}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	request_body {
+		max_size {$MAX_BODY}
+	}
+
+	# production webhooks + forms -> dedicated webhook processor
+	@webhooks path /webhook/* /webhook-test/* /webhook-waiting/* /form/* /form-test/* /form-waiting/*
+	handle @webhooks {
+		reverse_proxy n8n-webhook:5678 {
+			flush_interval -1
+		}
+	}
+
+	# UI, REST API, editor, websockets -> main instance
+	handle {
+		reverse_proxy n8n:5678 {
+			flush_interval -1
+		}
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 50MiB
+			roll_keep 5
+		}
+	}
+}
