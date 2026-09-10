@@ -1,0 +1,83 @@
+{
+  "name": "Realting → Bitrix24: алерт про помилки",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "Error Trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        -260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const e = $json;\nconst msg = [\n  '🔴 Помилка синхронізації Realting → Bitrix24',\n  'Воркфлоу: ' + (e.workflow?.name || '—'),\n  'Нода: ' + (e.execution?.lastNodeExecuted || '—'),\n  'Помилка: ' + (e.execution?.error?.message || e.trigger?.error?.message || '—'),\n  'Виконання: ' + (e.execution?.url || '—'),\n].join('\\n');\nreturn [{ json: { text: msg } }];"
+      },
+      "id": "Сформувати текст",
+      "name": "Сформувати текст",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -20,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.ALERT_TELEGRAM_CHAT_ID }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {}
+      },
+      "id": "Telegram: сповістити",
+      "name": "Telegram: сповістити",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        300
+      ],
+      "notes": "Потрібен креденшел Telegram Bot у n8n. Можна замінити на Email/Slack/Bitrix24-чат."
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Сформувати текст",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Сформувати текст": {
+      "main": [
+        [
+          {
+            "node": "Telegram: сповістити",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Kyiv"
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "realting"
+    },
+    {
+      "name": "bitrix24"
+    }
+  ]
+}

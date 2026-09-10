@@ -1,0 +1,221 @@
+{
+  "name": "Realting → Bitrix24: приймання webhook (запасний варіант)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "realting-orders",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "Webhook від Realting",
+      "name": "Webhook від Realting",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        300
+      ],
+      "notes": "Креденшел Header Auth (напр. X-Realting-Token) створюється в UI n8n. URL: https://<домен>/webhook/realting-orders"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Приймаємо push від Realting (якщо платформа вміє слати вебхуки) і зводимо до тієї ж схеми,\n// що й у поллінговому воркфлоу.\nconst body = $json.body ?? $json;\nconst rows = Array.isArray(body) ? body : (body.data || body.items || body.orders || [body]);\n\nconst get = (obj, paths) => {\n  for (const p of paths) {\n    const v = p.split('.').reduce((a, c) => (a === null || a === undefined ? a : a[c]), obj);\n    if (v !== undefined && v !== null && v !== '') return v;\n  }\n  return null;\n};\nconst str = (v) => (v === null || v === undefined ? '' : String(v).trim());\n\nreturn rows.map((r) => {\n  const fullName = str(get(r, ['name', 'full_name', 'contact_name', 'client.name']));\n  const parts = fullName.split(/\\s+/).filter(Boolean);\n  return {\n    json: {\n      externalId: str(get(r, ['id', 'order_id', 'uuid', 'number'])),\n      name: parts[0] || fullName,\n      lastName: parts.slice(1).join(' '),\n      phone: str(get(r, ['phone', 'contact_phone', 'client.phone'])).replace(/[^\\d+]/g, ''),\n      email: str(get(r, ['email', 'contact_email', 'client.email'])).toLowerCase(),\n      comment: str(get(r, ['message', 'comment', 'text'])),\n      objectUrl: str(get(r, ['object_url', 'url', 'link'])),\n      objectTitle: str(get(r, ['object_title', 'title'])),\n      raw: r,\n    },\n  };\n});"
+      },
+      "id": "Нормалізувати payload",
+      "name": "Нормалізувати payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -160,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ ($json.phone || '') + ($json.email || '') }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "Є телефон або пошта?",
+      "name": "Є телефон або пошта?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        80,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = [];\nfor (const item of $input.all()) {\n  const l = item.json;\n  const fields = {\n    TITLE: 'Realting #' + (l.externalId || 'push') + (l.objectTitle ? ' — ' + l.objectTitle : ''),\n    NAME: l.name || 'Без імені',\n    LAST_NAME: l.lastName || '',\n    SOURCE_ID: 'WEB',\n    SOURCE_DESCRIPTION: 'realting.com (webhook)',\n    COMMENTS: [l.comment, l.objectUrl, 'Realting ID: ' + l.externalId].filter(Boolean).join('\\n'),\n    ASSIGNED_BY_ID: Number($env.BITRIX_ASSIGNED_BY_ID || 1),\n    UF_CRM_REALTING_ID: l.externalId,\n    OPENED: 'Y',\n    UTM_SOURCE: 'realting.com',\n  };\n  if (l.phone) fields.PHONE = [{ VALUE: l.phone, VALUE_TYPE: 'WORK' }];\n  if (l.email) fields.EMAIL = [{ VALUE: l.email, VALUE_TYPE: 'WORK' }];\n  out.push({ json: { payload: { fields, params: { REGISTER_SONET_EVENT: 'N' } } } });\n}\nreturn out;"
+      },
+      "id": "Зібрати поля ліда",
+      "name": "Зібрати поля ліда",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        320,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.BITRIX_WEBHOOK_URL || '').replace(/\\/+$/, '') }}/crm.lead.add.json",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "timeout": 30000,
+          "batching": {
+            "batch": {
+              "batchSize": 2,
+              "batchInterval": 1200
+            }
+          }
+        }
+      },
+      "id": "Bitrix24: створити лід",
+      "name": "Bitrix24: створити лід",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        560,
+        200
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'ok', lead_id: $json.result }) }}",
+        "options": {}
+      },
+      "id": "200 OK",
+      "name": "200 OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        800,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseCode": 400,
+        "responseBody": "={{ JSON.stringify({ status: 'error', message: 'phone or email required' }) }}",
+        "options": {}
+      },
+      "id": "400 Bad Request",
+      "name": "400 Bad Request",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        320,
+        420
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook від Realting": {
+      "main": [
+        [
+          {
+            "node": "Нормалізувати payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Нормалізувати payload": {
+      "main": [
+        [
+          {
+            "node": "Є телефон або пошта?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Є телефон або пошта?": {
+      "main": [
+        [
+          {
+            "node": "Зібрати поля ліда",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "400 Bad Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Зібрати поля ліда": {
+      "main": [
+        [
+          {
+            "node": "Bitrix24: створити лід",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bitrix24: створити лід": {
+      "main": [
+        [
+          {
+            "node": "200 OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Kyiv"
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "realting"
+    },
+    {
+      "name": "bitrix24"
+    }
+  ]
+}

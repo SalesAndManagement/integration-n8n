@@ -1,0 +1,85 @@
+# n8n production stack: Caddy (TLS) -> n8n -> PostgreSQL
+# Запуск:  docker compose --env-file ../.env up -d
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      N8N_HOST: ${N8N_HOST}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - n8n
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  n8n:
+    image: n8nio/n8n:${N8N_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      # --- база ---
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      # --- мережа / URL ---
+      N8N_HOST: ${N8N_HOST}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: https
+      WEBHOOK_URL: https://${N8N_HOST}/
+      N8N_EDITOR_BASE_URL: https://${N8N_HOST}/
+      N8N_PROXY_HOPS: 1
+      # --- безпека ---
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_BASIC_AUTH_ACTIVE: "false"   # логін/пароль створюється в UI при першому вході
+      N8N_SECURE_COOKIE: "true"
+      # доступ до змінних оточення в експрешенах ({{$env.REALTING_EXPORT_URL}})
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      # --- експлуатація ---
+      GENERIC_TIMEZONE: ${TZ:-Europe/Kyiv}
+      TZ: ${TZ:-Europe/Kyiv}
+      N8N_RUNNERS_ENABLED: "true"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: 336            # годин (14 діб)
+      EXECUTIONS_DATA_SAVE_ON_SUCCESS: all
+      EXECUTIONS_DATA_SAVE_ON_ERROR: all
+      # --- секрети інтеграції (використовуються у воркфлоу) ---
+      REALTING_EXPORT_URL: ${REALTING_EXPORT_URL}
+      REALTING_API_TOKEN: ${REALTING_API_TOKEN}
+      REALTING_AUTH_MODE: ${REALTING_AUTH_MODE:-bearer}
+      BITRIX_WEBHOOK_URL: ${BITRIX_WEBHOOK_URL}
+      BITRIX_ASSIGNED_BY_ID: ${BITRIX_ASSIGNED_BY_ID:-1}
+      ALERT_TELEGRAM_CHAT_ID: ${ALERT_TELEGRAM_CHAT_ID:-}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  n8n_data:
+  pg_data:
+  caddy_data:
+  caddy_config:

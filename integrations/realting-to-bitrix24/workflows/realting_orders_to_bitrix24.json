@@ -1,0 +1,593 @@
+{
+  "name": "Realting → Bitrix24: імпорт заявок",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "Кожні 5 хвилин",
+      "name": "Кожні 5 хвилин",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "realtingUrl",
+              "type": "string",
+              "value": "={{ $env.REALTING_EXPORT_URL }}"
+            },
+            {
+              "id": "a2",
+              "name": "realtingToken",
+              "type": "string",
+              "value": "={{ $env.REALTING_API_TOKEN }}"
+            },
+            {
+              "id": "a3",
+              "name": "realtingAuthMode",
+              "type": "string",
+              "value": "={{ $env.REALTING_AUTH_MODE || 'bearer' }}"
+            },
+            {
+              "id": "a4",
+              "name": "bitrixWebhook",
+              "type": "string",
+              "value": "={{ ($env.BITRIX_WEBHOOK_URL || '').replace(/\\/+$/, '') }}"
+            },
+            {
+              "id": "a5",
+              "name": "assignedById",
+              "type": "number",
+              "value": "={{ Number($env.BITRIX_ASSIGNED_BY_ID || 1) }}"
+            },
+            {
+              "id": "a6",
+              "name": "externalIdField",
+              "type": "string",
+              "value": "UF_CRM_REALTING_ID"
+            },
+            {
+              "id": "a7",
+              "name": "bitrixSourceId",
+              "type": "string",
+              "value": "WEB"
+            },
+            {
+              "id": "a8",
+              "name": "overlapMinutes",
+              "type": "number",
+              "value": 15
+            },
+            {
+              "id": "a9",
+              "name": "firstRunDays",
+              "type": "number",
+              "value": 7
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "Конфіг",
+      "name": "Конфіг",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -240,
+        300
+      ],
+      "notes": "Усі секрети беруться зі змінних оточення контейнера (.env), у JSON їх немає."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Рахуємо вікно вибірки: від останнього успішного запуску мінус нахлест.\n// Стан живе у static data воркфлоу, тому переживає рестарт n8n.\nconst cfg = $('Конфіг').first().json;\nconst state = $getWorkflowStaticData('global');\nconst overlapMin = Number(cfg.overlapMinutes || 15);\nconst now = new Date();\n\nlet from;\nif (state.lastSyncIso) {\n  from = new Date(new Date(state.lastSyncIso).getTime() - overlapMin * 60000);\n} else {\n  // перший запуск — тягнемо за останні N днів (щоб не завантажити весь архів)\n  from = new Date(now.getTime() - Number(cfg.firstRunDays || 7) * 86400000);\n}\n\nconst fmt = (d) => d.toISOString().slice(0, 19).replace('T', ' ');\n\nreturn [{\n  json: {\n    dateFrom: fmt(from),\n    dateTo: fmt(now),\n    dateFromIso: from.toISOString(),\n    dateToIso: now.toISOString(),\n    runStartedIso: now.toISOString(),\n  },\n}];"
+      },
+      "id": "Вікно синхронізації",
+      "name": "Вікно синхронізації",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -20,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Конфіг').first().json.realtingUrl }}",
+        "sendQuery": true,
+        "specifyQuery": "json",
+        "jsonQuery": "={{ JSON.stringify(Object.assign({ date_from: $json.dateFrom, date_to: $json.dateTo, limit: 200 }, $('Конфіг').first().json.realtingAuthMode === 'query' ? { token: $('Конфіг').first().json.realtingToken } : {})) }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign({ Accept: 'application/json' }, $('Конфіг').first().json.realtingAuthMode === 'bearer' ? { Authorization: 'Bearer ' + $('Конфіг').first().json.realtingToken } : $('Конфіг').first().json.realtingAuthMode === 'header' ? { 'X-Api-Key': $('Конфіг').first().json.realtingToken } : {})) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "Realting: забрати заявки",
+      "name": "Realting: забрати заявки",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        200,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "ПІДЛАШТУВАТИ під реальну специфікацію з https://realting.com/ru/account/orders/api-export: назви query-параметрів дат/пагінації та спосіб передачі токена (bearer | header | query у REALTING_AUTH_MODE)."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Приводимо відповідь Realting до єдиної схеми.\n// Формат відповіді наперед невідомий (кабінет закритий логіном), тому:\n//  1) розгортаємо будь-яку обгортку-масив (data/items/orders/result/rows);\n//  2) шукаємо поля за списком вірогідних назв;\n//  3) весь оригінал кладемо в raw — нічого не губиться.\nconst state = $getWorkflowStaticData('global');\nstate.processedIds = state.processedIds || [];\n\nconst rows = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n  if (Array.isArray(j)) { rows.push(...j); continue; }\n  const arr = ['data', 'items', 'orders', 'result', 'rows', 'requests', 'leads']\n    .map((k) => j && j[k])\n    .find((v) => Array.isArray(v));\n  if (arr) rows.push(...arr);\n  else if (j && typeof j === 'object') rows.push(j);\n}\n\nconst get = (obj, paths) => {\n  for (const p of paths) {\n    const v = p.split('.').reduce((a, c) => (a === null || a === undefined ? a : a[c]), obj);\n    if (v !== undefined && v !== null && v !== '') return v;\n  }\n  return null;\n};\nconst str = (v) => (v === null || v === undefined ? '' : String(v).trim());\nconst phoneClean = (v) => str(v).replace(/[^\\d+]/g, '');\n\nconst out = [];\nconst skipped = [];\n\nfor (const r of rows) {\n  const externalId = str(get(r, ['id', 'order_id', 'orderId', 'uuid', 'guid', 'number', 'request_id']));\n  if (!externalId) { skipped.push({ reason: 'no_id', raw: r }); continue; }\n  if (state.processedIds.includes(externalId)) { skipped.push({ reason: 'already_synced', id: externalId }); continue; }\n\n  const phone = phoneClean(get(r, ['phone', 'phone_number', 'contact_phone', 'user.phone', 'client.phone', 'tel']));\n  const email = str(get(r, ['email', 'contact_email', 'user.email', 'client.email'])).toLowerCase();\n  if (!phone && !email) { skipped.push({ reason: 'no_contact', id: externalId, raw: r }); continue; }\n\n  const fullName = str(get(r, ['name', 'full_name', 'fullName', 'contact_name', 'user.name', 'client.name', 'first_name']));\n  const parts = fullName.split(/\\s+/).filter(Boolean);\n\n  out.push({\n    json: {\n      externalId,\n      createdAt: str(get(r, ['created_at', 'createdAt', 'date', 'date_create', 'datetime', 'time'])),\n      name: parts[0] || fullName,\n      lastName: parts.slice(1).join(' '),\n      fullName,\n      phone,\n      email,\n      comment: str(get(r, ['message', 'comment', 'text', 'body', 'question', 'description'])),\n      language: str(get(r, ['language', 'lang', 'locale'])),\n      objectId: str(get(r, ['object_id', 'objectId', 'property_id', 'listing_id', 'ad_id'])),\n      objectTitle: str(get(r, ['object_title', 'title', 'property', 'object.title', 'listing.title'])),\n      objectUrl: str(get(r, ['object_url', 'url', 'link', 'object.url', 'listing.url'])),\n      sourceType: str(get(r, ['type', 'order_type', 'form', 'source'])) || 'realting_order',\n      utmSource: str(get(r, ['utm_source', 'utm.source'])),\n      utmMedium: str(get(r, ['utm_medium', 'utm.medium'])),\n      utmCampaign: str(get(r, ['utm_campaign', 'utm.campaign'])),\n      raw: r,\n    },\n  });\n}\n\nif (skipped.length) {\n  console.log('Realting sync: пропущено ' + skipped.length + ' записів', JSON.stringify(skipped).slice(0, 2000));\n}\n\nreturn out;"
+      },
+      "id": "Нормалізувати заявки",
+      "name": "Нормалізувати заявки",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Конфіг').first().json.bitrixWebhook }}/crm.lead.list.json",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ filter: { [$('Конфіг').first().json.externalIdField]: $json.externalId }, select: ['ID'] }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "Bitrix24: пошук за Realting ID",
+      "name": "Bitrix24: пошук за Realting ID",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        640,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ ($json.result || []).length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "ignoreCase": true
+        }
+      },
+      "id": "Уже імпортовано?",
+      "name": "Уже імпортовано?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        860,
+        300
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "Пропустити (вже в CRM)",
+      "name": "Пропустити (вже в CRM)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1080,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Конфіг').first().json.bitrixWebhook }}/crm.duplicate.findbycomm.json",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ entity_type: 'LEAD', type: $('Нормалізувати заявки').item.json.phone ? 'PHONE' : 'EMAIL', values: [$('Нормалізувати заявки').item.json.phone || $('Нормалізувати заявки').item.json.email] }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "Bitrix24: пошук дубля за контактом",
+      "name": "Bitrix24: пошук дубля за контактом",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1080,
+        420
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c2",
+              "leftValue": "={{ (($json.result || {}).LEAD || []).length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "ignoreCase": true
+        }
+      },
+      "id": "Дубль за телефоном/поштою?",
+      "name": "Дубль за телефоном/поштою?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1300,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Конфіг').first().json.bitrixWebhook }}/crm.timeline.comment.add.json",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ fields: { ENTITY_ID: ($json.result.LEAD || [])[0], ENTITY_TYPE: 'lead', COMMENT: 'Нова заявка з realting.com #' + $('Нормалізувати заявки').item.json.externalId + '\\n' + ($('Нормалізувати заявки').item.json.comment || '') + '\\n' + ($('Нормалізувати заявки').item.json.objectUrl || '') } }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "Bitrix24: коментар у таймлайн дубля",
+      "name": "Bitrix24: коментар у таймлайн дубля",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1520,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Гілка \"знайшли дубль\": лишаємо слід у таймлайні існуючого ліда, нового не створюємо.\nconst out = [];\nfor (const item of $input.all()) {\n  out.push({ json: { externalId: item.json.externalId, outcome: 'duplicate', bitrixLeadId: item.json.bitrixLeadId } });\n}\nreturn out;"
+      },
+      "id": "Позначити як дубль",
+      "name": "Позначити як дубль",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1740,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Збираємо тіло запиту для crm.lead.add.\nconst cfg = $('Конфіг').first().json;\nconst out = [];\n\nfor (const item of $input.all()) {\n  const l = item.json;\n\n  const commentLines = [\n    l.comment ? 'Повідомлення: ' + l.comment : null,\n    l.objectTitle ? 'Обʼєкт: ' + l.objectTitle : null,\n    l.objectUrl ? 'Посилання: ' + l.objectUrl : null,\n    l.objectId ? 'ID обʼєкта: ' + l.objectId : null,\n    l.language ? 'Мова заявки: ' + l.language : null,\n    l.createdAt ? 'Створено на Realting: ' + l.createdAt : null,\n    'Realting ID: ' + l.externalId,\n  ].filter(Boolean);\n\n  const fields = {\n    TITLE: 'Realting #' + l.externalId + (l.objectTitle ? ' — ' + l.objectTitle : ''),\n    NAME: l.name || 'Без імені',\n    LAST_NAME: l.lastName || '',\n    SOURCE_ID: cfg.bitrixSourceId || 'WEB',\n    SOURCE_DESCRIPTION: 'realting.com / ' + l.sourceType,\n    COMMENTS: commentLines.join('\\n'),\n    ASSIGNED_BY_ID: cfg.assignedById,\n    OPENED: 'Y',\n    UTM_SOURCE: l.utmSource || 'realting.com',\n    UTM_MEDIUM: l.utmMedium || 'referral',\n    UTM_CAMPAIGN: l.utmCampaign || '',\n  };\n\n  if (cfg.externalIdField) fields[cfg.externalIdField] = l.externalId;\n  if (l.phone) fields.PHONE = [{ VALUE: l.phone, VALUE_TYPE: 'WORK' }];\n  if (l.email) fields.EMAIL = [{ VALUE: l.email, VALUE_TYPE: 'WORK' }];\n\n  out.push({\n    json: {\n      externalId: l.externalId,\n      payload: { fields, params: { REGISTER_SONET_EVENT: 'N' } },\n    },\n  });\n}\n\nreturn out;"
+      },
+      "id": "Зібрати поля ліда",
+      "name": "Зібрати поля ліда",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        540
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Конфіг').first().json.bitrixWebhook }}/crm.lead.add.json",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "timeout": 30000,
+          "batching": {
+            "batch": {
+              "batchSize": 2,
+              "batchInterval": 1200
+            }
+          }
+        }
+      },
+      "id": "Bitrix24: створити лід",
+      "name": "Bitrix24: створити лід",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1740,
+        540
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "notes": "Bitrix24 тримає ліміт ~2 запити/сек — тому batching 2 запити на 1.2с."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "r1",
+              "name": "externalId",
+              "type": "string",
+              "value": "={{ $('Зібрати поля ліда').item.json.externalId }}"
+            },
+            {
+              "id": "r2",
+              "name": "outcome",
+              "type": "string",
+              "value": "created"
+            },
+            {
+              "id": "r3",
+              "name": "bitrixLeadId",
+              "type": "string",
+              "value": "={{ $json.result }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "Результат створення",
+      "name": "Результат створення",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1960,
+        540
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Фіксуємо стан: які заявки вже поїхали в Bitrix24 і до якого моменту синхронізовані.\nconst state = $getWorkflowStaticData('global');\nstate.processedIds = state.processedIds || [];\n\nlet created = 0;\nlet duplicates = 0;\n\nfor (const item of $input.all()) {\n  const id = String(item.json.externalId || '');\n  if (id && !state.processedIds.includes(id)) state.processedIds.push(id);\n  if (item.json.outcome === 'duplicate') duplicates++;\n  else created++;\n}\n\n// тримаємо тільки останні 5000 ID, щоб static data не розросталася\nif (state.processedIds.length > 5000) {\n  state.processedIds = state.processedIds.slice(-5000);\n}\n\nconst win = $('Вікно синхронізації').first().json;\nstate.lastSyncIso = win.runStartedIso;\n\nreturn [{ json: { syncedTo: state.lastSyncIso, created, duplicates, totalKnownIds: state.processedIds.length } }];"
+      },
+      "id": "Зафіксувати стан",
+      "name": "Зафіксувати стан",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        420
+      ]
+    }
+  ],
+  "connections": {
+    "Кожні 5 хвилин": {
+      "main": [
+        [
+          {
+            "node": "Конфіг",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Конфіг": {
+      "main": [
+        [
+          {
+            "node": "Вікно синхронізації",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Вікно синхронізації": {
+      "main": [
+        [
+          {
+            "node": "Realting: забрати заявки",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Realting: забрати заявки": {
+      "main": [
+        [
+          {
+            "node": "Нормалізувати заявки",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Нормалізувати заявки": {
+      "main": [
+        [
+          {
+            "node": "Bitrix24: пошук за Realting ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bitrix24: пошук за Realting ID": {
+      "main": [
+        [
+          {
+            "node": "Уже імпортовано?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Уже імпортовано?": {
+      "main": [
+        [
+          {
+            "node": "Пропустити (вже в CRM)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Bitrix24: пошук дубля за контактом",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bitrix24: пошук дубля за контактом": {
+      "main": [
+        [
+          {
+            "node": "Дубль за телефоном/поштою?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Дубль за телефоном/поштою?": {
+      "main": [
+        [
+          {
+            "node": "Bitrix24: коментар у таймлайн дубля",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Зібрати поля ліда",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bitrix24: коментар у таймлайн дубля": {
+      "main": [
+        [
+          {
+            "node": "Позначити як дубль",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Позначити як дубль": {
+      "main": [
+        [
+          {
+            "node": "Зафіксувати стан",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Зібрати поля ліда": {
+      "main": [
+        [
+          {
+            "node": "Bitrix24: створити лід",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bitrix24: створити лід": {
+      "main": [
+        [
+          {
+            "node": "Результат створення",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Результат створення": {
+      "main": [
+        [
+          {
+            "node": "Зафіксувати стан",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "",
+    "timezone": "Europe/Kyiv"
+  },
+  "pinData": {},
+  "tags": [
+    {
+      "name": "realting"
+    },
+    {
+      "name": "bitrix24"
+    }
+  ]
+}
