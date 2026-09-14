@@ -85,3 +85,31 @@ class ConfigTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlaceholderGuardTest(unittest.TestCase):
+    """Найчастіша помилка при налаштуванні — скопійований текст-заповнювач."""
+
+    def test_cyrillic_api_token_is_rejected_with_a_readable_message(self):
+        with self.assertRaises(ConfigError) as ctx:
+            Config.from_env(
+                env={**BASE_ENV, "REALTING_API_TOKEN": "сюди-ключ-з-кабінету-Realting"},
+                env_file="/nonexistent",
+            )
+        self.assertIn("REALTING_API_TOKEN", str(ctx.exception))
+        self.assertIn("заповнювач", str(ctx.exception))
+
+    def test_cyrillic_webhook_token_is_rejected(self):
+        with self.assertRaises(ConfigError):
+            Config.from_env(env={**BASE_ENV, "WEBHOOK_TOKEN": "вставити-токен"}, env_file="/nonexistent")
+
+    def test_cyrillic_bitrix_url_is_rejected(self):
+        with self.assertRaises(ConfigError):
+            Config.from_env(
+                env={**BASE_ENV, "BITRIX_WEBHOOK_URL": "https://портал.bitrix24.ua/rest/1/hook/"},
+                env_file="/nonexistent",
+            )
+
+    def test_normal_ascii_token_passes(self):
+        config = Config.from_env(env={**BASE_ENV, "REALTING_API_TOKEN": "a1b2c3-D4"}, env_file="/nonexistent")
+        self.assertEqual(config.realting.token, "a1b2c3-D4")

@@ -31,6 +31,19 @@ def load_env_file(path: str | os.PathLike[str]) -> dict[str, str]:
     return values
 
 
+def _header_safe(value: str, key: str) -> str:
+    """HTTP-заголовки передаються в latin-1. Кирилиця в токені майже завжди
+    означає, що в конфіг скопіювали текст-заповнювач, а не реальний ключ."""
+    try:
+        value.encode("latin-1")
+    except UnicodeEncodeError:
+        raise ConfigError(
+            f"{key} містить нелатинські символи ({value[:20]!r}…) — схоже, у конфіг потрапив "
+            f"текст-заповнювач замість справжнього ключа"
+        ) from None
+    return value
+
+
 def _bool(value: str | None, default: bool = False) -> bool:
     if value is None or value == "":
         return default
@@ -123,7 +136,7 @@ class Config:
         if auth_mode not in allowed_modes:
             raise ConfigError(f"REALTING_AUTH_MODE має бути одним з {sorted(allowed_modes)}, отримано {auth_mode!r}")
 
-        token = get("REALTING_API_TOKEN")
+        token = _header_safe(get("REALTING_API_TOKEN"), "REALTING_API_TOKEN")
         if url and auth_mode != "none" and not token:
             raise ConfigError("REALTING_API_TOKEN не заданий (або виставте REALTING_AUTH_MODE=none)")
 
@@ -151,7 +164,10 @@ class Config:
             )
         # WEBHOOK_TOKEN перевіряється не тут, а при старті приймача (команда serve):
         # для sync/drain/check він не потрібен.
-        webhook_token = get("WEBHOOK_TOKEN")
+        webhook_token = _header_safe(get("WEBHOOK_TOKEN"), "WEBHOOK_TOKEN")
+
+        _header_safe(webhook, "BITRIX_WEBHOOK_URL")
+        _header_safe(url, "REALTING_EXPORT_URL")
 
         webhook_path = get("WEBHOOK_PATH", "/realting/webhook")
         if not webhook_path.startswith("/"):

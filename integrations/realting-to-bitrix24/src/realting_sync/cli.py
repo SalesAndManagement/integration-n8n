@@ -280,6 +280,10 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         log.warning("перервано користувачем")
         return 130
+    except Exception as exc:                       # noqa: BLE001 — краще рядок, ніж трейсбек
+        log.error("несподівана помилка: %s: %s", type(exc).__name__, exc)
+        log.debug("подробиці", exc_info=True)
+        return 1
 
 
 if __name__ == "__main__":
