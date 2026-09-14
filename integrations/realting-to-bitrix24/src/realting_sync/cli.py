@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import signal
 import sys
+import threading
 from datetime import datetime, timedelta, timezone
 
 from . import __version__
@@ -16,6 +18,7 @@ from .normalize import extract_rows, load_field_map, normalize_all
 from .realting import RealtingClient
 from .state import SyncState
 from .sync import Synchronizer
+from .webhook import make_server
 
 log = logging.getLogger("realting_sync")
 
@@ -49,6 +52,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_probe.add_argument("--days", type=int, default=7, help="за скільки останніх днів запитати (типово 7)")
     p_probe.add_argument("--raw", action="store_true", help="друкувати повну відповідь без обрізання")
 
+    p_serve = sub.add_parser("serve", help="запустити приймач хуків Realting")
+    p_serve.add_argument("--host", help="інтерфейс (типово 127.0.0.1 — назовні через реверс-проксі)")
+    p_serve.add_argument("--port", type=int, help="порт (типово 8080)")
+    p_serve.add_argument("--no-worker", action="store_true", help="лише приймати, не доставляти в Bitrix24")
+
+    p_drain = sub.add_parser("drain", help="доставити в Bitrix24 те, що чекає в черзі")
+    p_drain.add_argument("--limit", type=int, default=50, help="скільки записів узяти за раз")
+    p_drain.add_argument("--retry-failed", action="store_true", help="повернути в чергу записи зі статусом failed")
+
     sub.add_parser("check", help="перевірити конфіг, доступ до Realting і до Bitrix24")
     sub.add_parser("stats", help="стан локальної бази синхронізації")
     return parser
@@ -64,6 +76,12 @@ def setup_logging(level: str) -> None:
 
 
 def cmd_sync(config: Config, args: argparse.Namespace) -> int:
+    if not config.realting.url:
+        log.error(
+            "REALTING_EXPORT_URL не заданий — поллінг не налаштований. "
+            "Для роботи на вхідних хуках потрібні команди serve і drain"
+        )
+        return 2
     with SyncState(config.state_path) as state:
         syncer = Synchronizer(config, RealtingClient(config.realting), BitrixClient(config.bitrix), state)
         report = syncer.run(since=args.since, until=args.until, dry_run=args.dry_run, force=args.force)
@@ -101,22 +119,101 @@ def cmd_probe(config: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(config: Config, args: argparse.Namespace) -> int:
+    webhook_config = config.webhook
+    if webhook_config.auth_mode != "none" and not webhook_config.token:
+        log.error(
+            "WEBHOOK_TOKEN не заданий — приймач відрізняв би Realting від будь-кого в інтернеті лише за URL. "
+            "Впишіть ключ із кабінету Realting або свідомо відкрийте ендпоінт через WEBHOOK_AUTH_MODE=none"
+        )
+        return 2
+    if args.host or args.port:
+        webhook_config = type(webhook_config)(**{
+            **webhook_config.__dict__,
+            **({"host": args.host} if args.host else {}),
+            **({"port": args.port} if args.port else {}),
+        })
+
+    state = SyncState(config.state_path)
+    syncer = Synchronizer(config, RealtingClient(config.realting), BitrixClient(config.bitrix), state)
+    server = make_server(webhook_config, state)
+
+    stop = threading.Event()
+
+    def worker() -> None:
+        while not stop.is_set():
+            try:
+                report = syncer.drain()
+                if report.taken:
+                    log.info("%s", report.summary())
+            except Exception:                      # воркер не має права померти
+                log.exception("помилка воркера черги")
+            stop.wait(webhook_config.worker_interval)
+
+    def shutdown(signum, frame) -> None:
+        log.info("отримано сигнал %s — зупиняюсь", signum)
+        stop.set()
+        threading.Thread(target=server.shutdown, daemon=True).start()
+
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+
+    if not args.no_worker:
+        threading.Thread(target=worker, daemon=True, name="drain-worker").start()
+
+    log.info(
+        "приймач слухає http://%s:%s%s (авторизація: %s)",
+        webhook_config.host, webhook_config.port, webhook_config.path, webhook_config.auth_mode,
+    )
+    try:
+        server.serve_forever(poll_interval=0.5)
+    finally:
+        stop.set()
+        server.server_close()
+        state.close()
+        log.info("приймач зупинено")
+    return 0
+
+
+def cmd_drain(config: Config, args: argparse.Namespace) -> int:
+    with SyncState(config.state_path) as state:
+        if args.retry_failed:
+            returned = state.requeue_failed()
+            print(f"Повернуто в чергу записів: {returned}")
+        syncer = Synchronizer(config, RealtingClient(config.realting), BitrixClient(config.bitrix), state)
+        report = syncer.drain(limit=args.limit)
+    print(report.summary())
+    for error in report.errors:
+        print(f"  ! {error}", file=sys.stderr)
+    return 0 if not report.failed else 1
+
+
 def cmd_check(config: Config, args: argparse.Namespace) -> int:
     ok = True
-    print(f"Realting URL:      {config.realting.url}")
+    print(f"Realting URL:      {config.realting.url or '— (режим приймання хуків)'}")
     print(f"Авторизація:       {config.realting.auth_mode}")
+    print(f"Приймач хуків:     http://{config.webhook.host}:{config.webhook.port}{config.webhook.path}"
+          f" (перевірка: {config.webhook.auth_mode})")
+    if config.webhook.auth_mode != "none" and not config.webhook.token:
+        print("  ! WEBHOOK_TOKEN не заданий — приймач хуків не стартує (serve поверне помилку)")
+        if not config.realting.url:
+            ok = False
+            print("  ! і поллінг теж не налаштований — заявки не надходитимуть жодним каналом")
     print(f"Bitrix24 вебхук:   {config.bitrix.webhook_url.rsplit('/', 1)[0]}/***")
     print(f"Поле зовн. ID:     {config.bitrix.external_id_field}")
     print(f"Файл стану:        {config.state_path}")
 
-    try:
-        rows = extract_rows(RealtingClient(config.realting).fetch_raw(
-            datetime.now(timezone.utc) - timedelta(days=1), datetime.now(timezone.utc)
-        ))
-        print(f"Realting:          OK, заявок за добу: {len(rows)}")
-    except HttpError as exc:
-        ok = False
-        print(f"Realting:          ПОМИЛКА — {exc}")
+    if config.realting.url:
+        try:
+            rows = extract_rows(RealtingClient(config.realting).fetch_raw(
+                datetime.now(timezone.utc) - timedelta(days=1), datetime.now(timezone.utc)
+            ))
+            print(f"Realting:          OK, заявок за добу: {len(rows)}")
+        except HttpError as exc:
+            ok = False
+            print(f"Realting:          ПОМИЛКА — {exc}")
+    else:
+        print("Realting:          експорт не налаштований — працюємо на вхідних хуках")
 
     bitrix = BitrixClient(config.bitrix)
     try:
@@ -139,6 +236,20 @@ def cmd_stats(config: Config, args: argparse.Namespace) -> int:
         print(f"Файл стану:            {config.state_path}")
         print(f"Синхронізовано заявок: {state.processed_count()}")
         print(f"Останній успішний до:  {last.isoformat() if last else '—'}")
+
+        queue = state.inbox_stats()
+        if queue:
+            print("\nЧерга хуків:")
+            for status, count in sorted(queue.items()):
+                print(f"  {status:<8} {count}")
+        else:
+            print("\nЧерга хуків порожня")
+
+        errors = state.last_inbox_errors()
+        if errors:
+            print("\nОстанні помилки доставки:")
+            for row in errors:
+                print(f"  #{row['id']} (спроб {row['attempts']}): {row['last_error']}")
     return 0
 
 
@@ -153,7 +264,14 @@ def main(argv: list[str] | None = None) -> int:
 
     setup_logging(args.log_level or config.log_level)
 
-    handlers = {"sync": cmd_sync, "probe": cmd_probe, "check": cmd_check, "stats": cmd_stats}
+    handlers = {
+        "sync": cmd_sync,
+        "serve": cmd_serve,
+        "drain": cmd_drain,
+        "probe": cmd_probe,
+        "check": cmd_check,
+        "stats": cmd_stats,
+    }
     try:
         return handlers[args.command](config, args)
     except (HttpError, BitrixError) as exc:

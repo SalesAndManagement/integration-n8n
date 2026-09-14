@@ -80,7 +80,9 @@ class _Handler(BaseHTTPRequestHandler):
             self._send({"error": "UNKNOWN_METHOD", "error_description": method})
 
 
-class EndToEndTest(unittest.TestCase):
+class _FakePlatforms(unittest.TestCase):
+    """Фікстура: локальний HTTP-сервер за Realting і Bitrix24 одночасно."""
+
     @classmethod
     def setUpClass(cls):
         cls._proxy_backup = {k: os.environ.pop(k, None) for k in
@@ -123,6 +125,8 @@ class EndToEndTest(unittest.TestCase):
     def methods(self, name: str) -> list[object]:
         return [body for method, body in _Handler.calls if method == name]
 
+
+class CliEndToEndTest(_FakePlatforms):
     def test_check_passes_against_live_endpoints(self):
         self.assertEqual(self.run_cli("check"), 0)
 
@@ -161,5 +165,100 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(self.run_cli("probe", "--days", "3"), 0)
 
 
+class WebhookEndToEndTest(_FakePlatforms):
+    """Повний шлях хука: HTTP-приймач → черга в SQLite → CLI drain → Bitrix24."""
+
+    def setUp(self):
+        super().setUp()
+        with self.env_file.open("a", encoding="utf-8") as f:
+            f.write("\nWEBHOOK_TOKEN=s3cret\nWEBHOOK_AUTH_MODE=query\nWEBHOOK_PORT=0\n")
+
+        from realting_sync.config import Config
+        from realting_sync.state import SyncState
+        from realting_sync.webhook import make_server
+
+        config = Config.from_env(env={}, env_file=str(self.env_file))
+        self.state = SyncState(config.state_path)
+        self.addCleanup(self.state.close)
+        self.receiver = make_server(config.webhook, self.state)
+        self.receiver_port = self.receiver.server_address[1]
+        threading.Thread(target=self.receiver.serve_forever, daemon=True).start()
+        self.addCleanup(self.receiver.server_close)
+        self.addCleanup(self.receiver.shutdown)
+
+    def send_hook(self, order: dict, token: str = "s3cret") -> int:
+        import urllib.error
+        import urllib.request
+
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{self.receiver_port}/realting/webhook?token={token}",
+            data=json.dumps(order).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as resp:
+                return resp.status
+        except urllib.error.HTTPError as exc:
+            return exc.code
+
+    def test_hook_reaches_bitrix_through_the_queue(self):
+        self.assertEqual(self.send_hook(ORDERS[0]), 200)
+        self.assertEqual(self.methods("crm.lead.add"), [])       # приймач сам у портал не ходить
+
+        self.assertEqual(self.run_cli("drain"), 0)
+
+        added = self.methods("crm.lead.add")
+        self.assertEqual(len(added), 1)
+        self.assertEqual(added[0]["fields"]["UF_CRM_REALTING_ID"], "101")
+        self.assertEqual(added[0]["fields"]["PHONE"], [{"VALUE": "+380671234567", "VALUE_TYPE": "WORK"}])
+
+        # повторна доставка того самого хука нового ліда не створює
+        self.assertEqual(self.send_hook(ORDERS[0]), 200)
+        _Handler.calls = []
+        self.assertEqual(self.run_cli("drain"), 0)
+        self.assertEqual(self.methods("crm.lead.add"), [])
+
+    def test_hook_with_wrong_token_never_reaches_the_queue(self):
+        self.assertEqual(self.send_hook(ORDERS[0], token="wrong"), 401)
+        self.assertEqual(self.run_cli("drain"), 0)
+        self.assertEqual(self.methods("crm.lead.add"), [])
+
+    def test_stats_shows_queue(self):
+        self.send_hook(ORDERS[1])
+        self.assertEqual(self.run_cli("stats"), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class GuardsTest(unittest.TestCase):
+    """Команди мають відмовлятися працювати з недоналаштованим каналом."""
+
+    def _env(self, extra: str = "") -> str:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "sync.env"
+        path.write_text(
+            "BITRIX_WEBHOOK_URL=https://portal.bitrix24.ua/rest/1/hook/\n"
+            f"STATE_PATH={tmp.name}/state.db\n" + extra,
+            encoding="utf-8",
+        )
+        return str(path)
+
+    def test_sync_without_export_url_exits_with_error(self):
+        self.assertEqual(main(["--env-file", self._env(), "--log-level", "CRITICAL", "sync"]), 2)
+
+    def test_serve_without_token_refuses_to_start(self):
+        self.assertEqual(main(["--env-file", self._env(), "--log-level", "CRITICAL", "serve"]), 2)
+
+    def test_serve_starts_when_auth_disabled_explicitly(self):
+        # WEBHOOK_AUTH_MODE=none — свідомо відкритий ендпоінт; перевіряємо, що конфіг проходить
+        from realting_sync.config import Config
+
+        config = Config.from_env(env={}, env_file=self._env("WEBHOOK_AUTH_MODE=none\n"))
+        self.assertEqual(config.webhook.auth_mode, "none")
+
+    def test_drain_on_empty_queue_is_fine(self):
+        self.assertEqual(main(["--env-file", self._env(), "--log-level", "CRITICAL", "drain"]), 0)

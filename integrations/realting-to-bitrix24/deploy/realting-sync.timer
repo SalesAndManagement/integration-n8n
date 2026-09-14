@@ -1,5 +1,5 @@
 [Unit]
-Description=Запуск імпорту заявок realting.com кожні 5 хвилин
+Description=Разбір черги заявок realting.com кожні 5 хвилин
 
 [Timer]
 OnBootSec=2min

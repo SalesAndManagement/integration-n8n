@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Callable
 
 from realting_sync.config import BitrixConfig, Config, RealtingConfig
 from realting_sync.httpclient import Response
 from realting_sync.state import SyncState
+
+# тести запускають і як пакет, і як окремі модулі — глушимо логи в обох випадках
+logging.disable(logging.CRITICAL)
 
 
 def json_response(payload: Any, status: int = 200) -> Response:

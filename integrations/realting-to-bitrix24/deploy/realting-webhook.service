@@ -1,21 +1,22 @@
 [Unit]
-Description=Доставка відкладених заявок realting.com у Bitrix24
+Description=Приймач хуків realting.com → Bitrix24
 Documentation=https://github.com/SalesAndManagement/integration-n8n
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=oneshot
+Type=simple
 User=realting
 Group=realting
 WorkingDirectory=/opt/realting-sync
 Environment=PYTHONPATH=/opt/realting-sync/src
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/etc/realting-sync.env
-ExecStart=/usr/bin/python3 -m realting_sync drain
-TimeoutStartSec=600
+ExecStart=/usr/bin/python3 -m realting_sync serve
+Restart=always
+RestartSec=5s
 
-# Ізоляція: сервісу потрібні лише власний каталог стану й мережа
+# Ізоляція: сервісу потрібні лише свій каталог стану й мережа
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

@@ -1,0 +1,19 @@
+# TLS-термінація для приймача хуків. Домен підставляється з /etc/caddy/realting.env
+# (див. deploy/install-caddy.sh). Caddy сам візьме сертифікат Let's Encrypt.
+{$REALTING_WEBHOOK_DOMAIN} {
+	encode zstd gzip
+
+	# приймач слухає лише на localhost — назовні ходить тільки Caddy
+	reverse_proxy 127.0.0.1:8080
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/realting-webhook.log
+		format json
+	}
+}

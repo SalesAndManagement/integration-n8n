@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from .bitrix import BitrixClient, BitrixError, duplicate_comment
 from .config import Config
-from .normalize import Lead, SkippedOrder, load_field_map, normalize_all
+from .normalize import Lead, SkippedOrder, extract_rows, load_field_map, normalize_all
 from .realting import RealtingClient
 from .state import SyncState
 
@@ -19,6 +20,31 @@ DUPLICATE = "duplicate"
 ALREADY_IN_CRM = "already_in_crm"
 SKIPPED = "skipped"
 FAILED = "failed"
+
+
+@dataclass
+class DrainReport:
+    """Підсумок обробки черги вхідних хуків."""
+
+    taken: int = 0
+    created: int = 0
+    duplicates: int = 0
+    already_in_crm: int = 0
+    skipped: int = 0
+    retried: int = 0
+    failed: int = 0
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return self.failed == 0 and self.retried == 0
+
+    def summary(self) -> str:
+        return (
+            f"черга: взято {self.taken}, створено {self.created}, дублів {self.duplicates}, "
+            f"вже в CRM {self.already_in_crm}, пропущено {self.skipped}, "
+            f"відкладено {self.retried}, провалено {self.failed}"
+        )
 
 
 @dataclass
@@ -109,6 +135,62 @@ class Synchronizer:
         # заявки, які впали на помилці Bitrix24 — наступний запуск спробує ще раз.
         if not dry_run and report.ok:
             self.state.set_last_sync(date_to)
+
+        return report
+
+    def drain(self, limit: int = 50, now: datetime | None = None) -> DrainReport:
+        """Обробляє чергу вхідних хуків: кожен запис → ліди в Bitrix24.
+
+        Помилка порталу не втрачає заявку: запис лишається в черзі й отримує
+        наступну спробу за наростаючою паузою (1 хв → 6 год).
+        """
+        report = DrainReport()
+        moment = now or datetime.now(timezone.utc)
+
+        with self.state.lock:
+            rows = self.state.due_inbox(limit=limit, now=moment)
+        report.taken = len(rows)
+
+        for row in rows:
+            attempts = int(row["attempts"]) + 1
+            try:
+                payload = json.loads(row["payload"])
+            except json.JSONDecodeError as exc:
+                with self.state.lock:
+                    self.state.mark_inbox_done(int(row["id"]), None, status="skipped")
+                report.skipped += 1
+                log.error("запис черги #%s не є JSON (%s) — пропускаю", row["id"], exc)
+                continue
+
+            leads, skipped = normalize_all(extract_rows(payload), self._field_map)
+            if skipped:
+                for item in skipped:
+                    log.info("хук #%s: пропущено заявку (%s): %s", row["id"], item.reason, _short(item.raw))
+            if not leads:
+                with self.state.lock:
+                    self.state.mark_inbox_done(int(row["id"]), None, status="skipped")
+                report.skipped += 1
+                continue
+
+            try:
+                outcomes = [self.process(lead) for lead in leads]
+            except BitrixError as exc:
+                with self.state.lock:
+                    next_at = self.state.mark_inbox_retry(int(row["id"]), str(exc), attempts, now=moment)
+                if next_at:
+                    report.retried += 1
+                    log.warning("хук #%s: спроба %s невдала (%s), наступна о %s", row["id"], attempts, exc, next_at)
+                else:
+                    report.failed += 1
+                    report.errors.append(f"#{row['id']}: {exc}")
+                    log.error("хук #%s: вичерпано спроби — %s", row["id"], exc)
+                continue
+
+            report.created += outcomes.count(CREATED)
+            report.duplicates += outcomes.count(DUPLICATE)
+            report.already_in_crm += outcomes.count(ALREADY_IN_CRM)
+            with self.state.lock:
+                self.state.mark_inbox_done(int(row["id"]), leads[0].external_id)
 
         return report
 

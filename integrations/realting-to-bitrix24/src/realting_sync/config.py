@@ -57,6 +57,24 @@ class RealtingConfig:
 
 
 @dataclass(frozen=True)
+class WebhookConfig:
+    """Приймач хуків від Realting."""
+
+    host: str = "127.0.0.1"
+    port: int = 8080
+    path: str = "/realting/webhook"
+    token: str = ""
+    # як Realting підтверджує себе: query | header | bearer | hmac | none
+    auth_mode: str = "query"
+    auth_header: str = "X-Api-Key"
+    query_param: str = "token"
+    hmac_header: str = "X-Signature"
+    hmac_algorithm: str = "sha256"
+    max_body_bytes: int = 1_048_576
+    worker_interval: float = 5.0
+
+
+@dataclass(frozen=True)
 class BitrixConfig:
     webhook_url: str
     external_id_field: str = "UF_CRM_REALTING_ID"
@@ -71,6 +89,7 @@ class BitrixConfig:
 class Config:
     realting: RealtingConfig
     bitrix: BitrixConfig
+    webhook: WebhookConfig = field(default_factory=WebhookConfig)
     state_path: Path = Path("/var/lib/realting-sync/state.db")
     overlap_minutes: int = 15
     first_run_days: int = 7
@@ -95,9 +114,9 @@ class Config:
             except ValueError as exc:
                 raise ConfigError(f"{key} має бути цілим числом, отримано {raw!r}") from exc
 
+        # URL експорту потрібен лише для режиму поллінгу (команда sync);
+        # для приймання хуків достатньо WEBHOOK_TOKEN.
         url = get("REALTING_EXPORT_URL")
-        if not url:
-            raise ConfigError("REALTING_EXPORT_URL не заданий (URL зі сторінки api-export у кабінеті Realting)")
 
         auth_mode = get("REALTING_AUTH_MODE", "bearer").lower()
         allowed_modes = {"bearer", "header", "query", "basic", "none"}
@@ -105,7 +124,7 @@ class Config:
             raise ConfigError(f"REALTING_AUTH_MODE має бути одним з {sorted(allowed_modes)}, отримано {auth_mode!r}")
 
         token = get("REALTING_API_TOKEN")
-        if auth_mode != "none" and not token:
+        if url and auth_mode != "none" and not token:
             raise ConfigError("REALTING_API_TOKEN не заданий (або виставте REALTING_AUTH_MODE=none)")
 
         webhook = get("BITRIX_WEBHOOK_URL").rstrip("/")
@@ -123,6 +142,20 @@ class Config:
         pagination = get("REALTING_PAGINATION", "page").lower()
         if pagination not in {"page", "none"}:
             raise ConfigError("REALTING_PAGINATION має бути 'page' або 'none'")
+
+        webhook_auth = get("WEBHOOK_AUTH_MODE", "query").lower()
+        allowed_webhook_modes = {"query", "header", "bearer", "hmac", "none"}
+        if webhook_auth not in allowed_webhook_modes:
+            raise ConfigError(
+                f"WEBHOOK_AUTH_MODE має бути одним з {sorted(allowed_webhook_modes)}, отримано {webhook_auth!r}"
+            )
+        # WEBHOOK_TOKEN перевіряється не тут, а при старті приймача (команда serve):
+        # для sync/drain/check він не потрібен.
+        webhook_token = get("WEBHOOK_TOKEN")
+
+        webhook_path = get("WEBHOOK_PATH", "/realting/webhook")
+        if not webhook_path.startswith("/"):
+            raise ConfigError("WEBHOOK_PATH має починатися зі '/'")
 
         field_map = get("REALTING_FIELD_MAP_FILE")
 
@@ -151,6 +184,18 @@ class Config:
                 source_id=get("BITRIX_SOURCE_ID", "WEB"),
                 timeout=get_int("BITRIX_TIMEOUT", 30),
                 comment_on_duplicate=_bool(get("BITRIX_COMMENT_ON_DUPLICATE"), True),
+            ),
+            webhook=WebhookConfig(
+                host=get("WEBHOOK_HOST", "127.0.0.1"),
+                port=get_int("WEBHOOK_PORT", 8080),
+                path=webhook_path,
+                token=webhook_token,
+                auth_mode=webhook_auth,
+                auth_header=get("WEBHOOK_AUTH_HEADER", "X-Api-Key"),
+                query_param=get("WEBHOOK_QUERY_PARAM", "token"),
+                hmac_header=get("WEBHOOK_HMAC_HEADER", "X-Signature"),
+                hmac_algorithm=get("WEBHOOK_HMAC_ALGORITHM", "sha256"),
+                max_body_bytes=get_int("WEBHOOK_MAX_BODY_BYTES", 1_048_576),
             ),
             state_path=Path(get("STATE_PATH", "/var/lib/realting-sync/state.db")),
             overlap_minutes=get_int("SYNC_OVERLAP_MINUTES", 15),

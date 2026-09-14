@@ -51,17 +51,20 @@ WRAP
 chmod 755 /usr/local/bin/realting-sync
 
 echo "==> systemd"
+install -m 644 "$SRC_DIR/deploy/realting-webhook.service" /etc/systemd/system/realting-webhook.service
 install -m 644 "$SRC_DIR/deploy/realting-sync.service" /etc/systemd/system/realting-sync.service
 install -m 644 "$SRC_DIR/deploy/realting-sync.timer" /etc/systemd/system/realting-sync.timer
 systemctl daemon-reload
+systemctl try-restart realting-webhook.service 2>/dev/null || true
 
 cat <<'NEXT'
 
 Готово. Далі:
-  1. sudo nano /etc/realting-sync.env          # URL, токен, вебхук Bitrix24
-  2. sudo -u realting realting-sync check      # перевірка доступів
-  3. sudo -u realting realting-sync probe      # подивитись формат відповіді Realting
-  4. sudo -u realting realting-sync sync --dry-run
-  5. sudo systemctl enable --now realting-sync.timer
-  6. journalctl -u realting-sync -f            # логи
+  1. sudo nano /etc/realting-sync.env               # WEBHOOK_TOKEN + вебхук Bitrix24
+  2. sudo -u realting realting-sync check           # перевірка конфігу й доступу до Bitrix24
+  3. sudo systemctl enable --now realting-webhook   # приймач хуків на 127.0.0.1:8080
+  4. sudo ./deploy/install-caddy.sh <домен>         # HTTPS назовні
+  5. адресу https://<домен>/realting/webhook?token=<WEBHOOK_TOKEN> вказати в кабінеті Realting
+  6. sudo systemctl enable --now realting-sync.timer  # страховка: розбір черги кожні 5 хв
+  7. journalctl -u realting-webhook -f              # логи приймача
 NEXT
