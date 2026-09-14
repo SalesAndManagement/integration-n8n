@@ -47,6 +47,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync.add_argument("--until", type=parse_moment, help="кінець періоду (типово — зараз)")
     p_sync.add_argument("--dry-run", action="store_true", help="нічого не писати в Bitrix24, лише показати")
     p_sync.add_argument("--force", action="store_true", help="ігнорувати локальний стан (дедуп у Bitrix24 лишається)")
+    p_sync.add_argument("--all", dest="whole_archive", action="store_true",
+                        help="узяти весь архів заявок, без обмеження за датою (разовий перенос історії)")
 
     p_probe = sub.add_parser("probe", help="показати сиру відповідь Realting і результат мапінгу")
     p_probe.add_argument("--days", type=int, default=7, help="за скільки останніх днів запитати (типово 7)")
@@ -84,7 +86,13 @@ def cmd_sync(config: Config, args: argparse.Namespace) -> int:
         return 2
     with SyncState(config.state_path) as state:
         syncer = Synchronizer(config, RealtingClient(config.realting), BitrixClient(config.bitrix), state)
-        report = syncer.run(since=args.since, until=args.until, dry_run=args.dry_run, force=args.force)
+        report = syncer.run(
+            since=args.since,
+            until=args.until,
+            dry_run=args.dry_run,
+            force=args.force,
+            whole_archive=args.whole_archive,
+        )
     print(report.summary())
     for error in report.errors:
         print(f"  ! {error}", file=sys.stderr)

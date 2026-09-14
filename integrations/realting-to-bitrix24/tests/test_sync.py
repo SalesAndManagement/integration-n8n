@@ -173,3 +173,57 @@ class RunTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClientSideWindowTest(unittest.TestCase):
+    """Експорт Realting ігнорує параметри дат — вікно доводиться застосовувати самим."""
+
+    OLD = {"id": 1, "phone": "+380671234567", "created_at": "2025-03-16 01:16:06"}
+    NEW = {"id": 2, "phone": "+380509998877", "created_at": "2026-09-14 10:00:00"}
+    NO_DATE = {"id": 3, "phone": "+380501112233"}
+
+    def test_old_orders_are_left_outside_the_window(self):
+        syncer, state, bitrix = build([self.OLD, self.NEW])
+        report = syncer.run(until=datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc))
+        self.assertEqual(report.created, 1)
+        self.assertEqual(report.out_of_window, 1)
+        self.assertEqual([lead.external_id for lead in bitrix.added], ["2"])
+
+    def test_whole_archive_takes_everything(self):
+        syncer, state, bitrix = build([self.OLD, self.NEW])
+        report = syncer.run(until=datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc), whole_archive=True)
+        self.assertEqual(report.created, 2)
+        self.assertEqual(report.out_of_window, 0)
+
+    def test_order_without_a_date_is_not_dropped(self):
+        syncer, _, bitrix = build([self.NO_DATE])
+        report = syncer.run(until=datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc))
+        self.assertEqual(report.created, 1)
+
+    def test_explicit_since_moves_the_boundary(self):
+        syncer, _, bitrix = build([self.OLD, self.NEW])
+        report = syncer.run(
+            since=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            until=datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(report.created, 2)
+
+    def test_summary_mentions_out_of_window_only_when_there_is_something(self):
+        syncer, _, _ = build([self.NEW])
+        self.assertNotIn("поза вікном", syncer.run(until=datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc)).summary())
+
+
+class ParseMomentTest(unittest.TestCase):
+    def test_realting_format(self):
+        from realting_sync.sync import parse_moment
+
+        self.assertEqual(
+            parse_moment("2026-09-01 00:15:15"),
+            datetime(2026, 9, 1, 0, 15, 15, tzinfo=timezone.utc),
+        )
+
+    def test_unknown_values_are_none(self):
+        from realting_sync.sync import parse_moment
+
+        self.assertIsNone(parse_moment(""))
+        self.assertIsNone(parse_moment("вчора"))

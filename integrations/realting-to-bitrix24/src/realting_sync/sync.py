@@ -47,6 +47,23 @@ class DrainReport:
         )
 
 
+def parse_moment(value: str) -> datetime | None:
+    """Дата заявки Realting ('2026-09-01 00:15:15') → aware UTC. None, якщо не розпізнали."""
+    text = (value or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 @dataclass
 class SyncReport:
     date_from: datetime
@@ -56,6 +73,7 @@ class SyncReport:
     duplicates: int = 0
     already_in_crm: int = 0
     skipped: int = 0
+    out_of_window: int = 0
     failed: int = 0
     dry_run: bool = False
     errors: list[str] = field(default_factory=list)
@@ -67,11 +85,17 @@ class SyncReport:
     def summary(self) -> str:
         window = f"{self.date_from:%Y-%m-%d %H:%M} → {self.date_to:%Y-%m-%d %H:%M} UTC"
         prefix = "DRY-RUN " if self.dry_run else ""
-        return (
-            f"{prefix}{window}: отримано {self.fetched}, створено {self.created}, "
-            f"дублів {self.duplicates}, вже в CRM {self.already_in_crm}, "
-            f"пропущено {self.skipped}, помилок {self.failed}"
-        )
+        parts = [
+            f"{prefix}{window}: отримано {self.fetched}",
+            f"створено {self.created}",
+            f"дублів {self.duplicates}",
+            f"вже в CRM {self.already_in_crm}",
+            f"пропущено {self.skipped}",
+        ]
+        if self.out_of_window:
+            parts.append(f"поза вікном {self.out_of_window}")
+        parts.append(f"помилок {self.failed}")
+        return ", ".join(parts)
 
 
 class Synchronizer:
@@ -104,6 +128,7 @@ class Synchronizer:
         until: datetime | None = None,
         dry_run: bool = False,
         force: bool = False,
+        whole_archive: bool = False,
     ) -> SyncReport:
         date_from, date_to = self.window(since, until)
         report = SyncReport(date_from=date_from, date_to=date_to, dry_run=dry_run)
@@ -114,6 +139,19 @@ class Synchronizer:
         report.skipped = len(skipped)
         for item in skipped:
             log.info("пропущено заявку (%s): %s", item.reason, _short(item.raw))
+
+        # Експорт Realting не звужується параметрами дат — він щоразу віддає весь
+        # архів заявок. Тому вікно застосовуємо самі, інакше перший же прогін
+        # завантажив би в CRM усі історичні заявки.
+        if not whole_archive:
+            within: list[Lead] = []
+            for lead in leads:
+                created = parse_moment(lead.created_at)
+                if created is not None and created < date_from:
+                    report.out_of_window += 1
+                    continue
+                within.append(lead)
+            leads = within
 
         for lead in leads:
             try:
