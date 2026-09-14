@@ -107,3 +107,36 @@ class XmlResponseTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SuccessEnvelopeTest(unittest.TestCase):
+    """Realting загортає відповідь у {"success": …} — відмову треба ловити явно."""
+
+    def test_success_false_raises_with_platform_message(self):
+        from realting_sync.httpclient import HttpError
+
+        payload = {"success": False, "error": "invalid_api_key", "message": "Invalid or inactive API key."}
+        transport = FakeTransport(lambda url, kw: payload)
+        client = RealtingClient(make_config().realting, transport=transport)
+        with self.assertRaises(HttpError) as ctx:
+            client.fetch_raw(FROM, TO)
+        self.assertIn("invalid_api_key", str(ctx.exception))
+        self.assertIn("Invalid or inactive API key", str(ctx.exception))
+
+    def test_success_true_envelope_is_unwrapped_to_orders(self):
+        payload = {"success": True, "data": [{"id": 1, "phone": "+380671234567"}]}
+        transport = FakeTransport(lambda url, kw: payload)
+        rows = RealtingClient(make_config().realting, transport=transport).fetch_orders(FROM, TO)
+        self.assertEqual([row["id"] for row in rows], [1])
+
+    def test_success_true_with_empty_data_yields_nothing(self):
+        transport = FakeTransport(lambda url, kw: {"success": True, "data": []})
+        rows = RealtingClient(make_config().realting, transport=transport).fetch_orders(FROM, TO)
+        self.assertEqual(rows, [])
+
+    def test_x_api_key_header_is_sent(self):
+        config = make_config().realting
+        config = type(config)(**{**config.__dict__, "auth_mode": "header", "auth_header": "X-Api-Key"})
+        transport = FakeTransport(lambda url, kw: {"success": True, "data": []})
+        RealtingClient(config, transport=transport).fetch_raw(FROM, TO)
+        self.assertEqual(transport.calls[0]["headers"]["X-Api-Key"], "t0ken")

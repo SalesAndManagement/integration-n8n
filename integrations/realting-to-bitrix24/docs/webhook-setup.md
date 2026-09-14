@@ -6,7 +6,11 @@
 https://<ваш-домен>/realting/webhook?token=<WEBHOOK_TOKEN>
 ```
 
-`WEBHOOK_TOKEN` — це ключ, який дає Realting. Він же має лежати в `/etc/realting-sync.env`.
+`WEBHOOK_TOKEN` — **наш власний секрет**, а не ключ Realting: платформа просто шле POST на ту
+адресу, яку ви їй дали, тому токен у самому URL працює незалежно від того, що вона вміє.
+Згенеруйте його `openssl rand -hex 24` і покладіть у `/etc/realting-sync.env`.
+Якщо Realting додатково підписує запити власним ключем — переведіть перевірку на нього
+(таблиця нижче), тоді `WEBHOOK_TOKEN` = ключ із кабінету.
 Якщо платформа передає ключ не в URL, а інакше — змініть `WEBHOOK_AUTH_MODE`:
 
 | Як Realting передає ключ | `WEBHOOK_AUTH_MODE` | Додатково |

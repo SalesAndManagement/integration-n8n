@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from .config import RealtingConfig
-from .httpclient import Response, request
+from .httpclient import HttpError, Response, request
 from .normalize import extract_rows
 
 log = logging.getLogger(__name__)
@@ -55,7 +55,20 @@ class RealtingClient:
             headers=self._headers(),
             timeout=self.config.timeout,
         )
-        return response.parsed()
+        payload = response.parsed()
+
+        # Realting відповідає конвертом {"success": bool, ...}. Відмову з кодом 200
+        # треба ловити явно, інакше вона поїде далі як «дивна заявка».
+        if isinstance(payload, dict) and payload.get("success") is False:
+            raise HttpError(
+                "Realting відмовив: {} — {}".format(
+                    payload.get("error", "unknown_error"),
+                    payload.get("message", ""),
+                ),
+                response.status,
+                str(payload)[:500],
+            )
+        return payload
 
     def fetch_orders(self, date_from: datetime, date_to: datetime) -> list[dict[str, Any]]:
         """Усі заявки за період, з пагінацією до порожньої/неповної сторінки."""
