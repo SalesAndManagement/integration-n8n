@@ -1,0 +1,13 @@
+[Unit]
+Description=Запуск імпорту заявок realting.com кожні 5 хвилин
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+RandomizedDelaySec=30s
+Persistent=true
+Unit=realting-sync.service
+
+[Install]
+WantedBy=timers.target
