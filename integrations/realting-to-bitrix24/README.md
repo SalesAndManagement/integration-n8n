@@ -34,10 +34,17 @@ realting.com (api-export)          VPS                              Bitrix24
 
 ```bash
 sudo apt update && sudo apt -y install git        # Python 3.10+ в Ubuntu 22.04 вже є
-sudo git clone https://github.com/SalesAndManagement/integration-n8n /opt/src
+# -b обовʼязково: папка з сервісом живе на робочій гілці, не на main
+sudo git clone -b claude/adoring-cori-cmo1iz https://github.com/SalesAndManagement/integration-n8n /opt/src
 cd /opt/src/integrations/realting-to-bitrix24
-sudo git checkout claude/adoring-cori-cmo1iz
 sudo ./deploy/install.sh
+```
+
+Якщо репозиторій уже склонований (гілка `main`) — просто перемкніть її:
+
+```bash
+cd /opt/src && sudo git checkout claude/adoring-cori-cmo1iz
+cd integrations/realting-to-bitrix24 && sudo ./deploy/install.sh
 ```
 
 Інсталятор створює системного користувача `realting`, кладе код у `/opt/realting-sync`,
