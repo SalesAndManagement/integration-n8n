@@ -29,11 +29,16 @@ DEFAULT_FIELD_MAP: dict[str, tuple[str, ...]] = {
     "phone": ("phone", "phone_number", "phoneNumber", "contact_phone", "tel", "user.phone", "client.phone", "contact.phone"),
     "email": ("email", "e_mail", "contact_email", "user.email", "client.email", "contact.email"),
     "comment": ("message", "comment", "text", "body", "question", "description", "note"),
-    "language": ("language", "lang", "locale"),
+    "language": ("lang_code", "lang_title", "language", "lang", "locale"),
     "object_id": ("object_id", "objectId", "property_id", "listing_id", "ad_id", "object.id"),
     "object_title": ("object_title", "objectTitle", "title", "property", "object.title", "listing.title"),
     "object_url": ("object_url", "objectUrl", "url", "link", "object.url", "listing.url"),
     "source_type": ("type", "order_type", "form", "form_type", "source"),
+    "region": ("region", "country", "geo"),
+    "status": ("status_title", "status", "status_id"),
+    "object_price": ("object.price", "price"),
+    "object_type": ("object.type_title", "object_type"),
+    "received_at": ("received_at", "receivedAt"),
     "utm_source": ("utm_source", "utm.source"),
     "utm_medium": ("utm_medium", "utm.medium"),
     "utm_campaign": ("utm_campaign", "utm.campaign"),
@@ -55,6 +60,12 @@ class Lead:
     object_title: str = ""
     object_url: str = ""
     source_type: str = "realting_order"
+    region: str = ""
+    status: str = ""
+    object_price: str = ""
+    object_type: str = ""
+    received_at: str = ""
+    masked: bool = False
     utm_source: str = ""
     utm_medium: str = ""
     utm_campaign: str = ""
@@ -175,6 +186,18 @@ def first_value(row: dict[str, Any], paths: Sequence[str]) -> str:
     return ""
 
 
+MASK_MARKER = "***"
+
+
+def is_masked(*values: str) -> bool:
+    """Realting ховає контакти заявок, не прийнятих у роботу: 'Ник***', '+790******21'.
+
+    Такі заявки не можна вантажити в CRM: менеджеру нікуди дзвонити, а зайнятий
+    зовнішній ID потім завадить імпортувати ту саму заявку з відкритими контактами.
+    """
+    return any(MASK_MARKER in (value or "") for value in values)
+
+
 def clean_phone(value: str) -> str:
     """Лишає цифри та провідний '+'. Порожньо, якщо цифр менше семи."""
     if not value:
@@ -205,9 +228,14 @@ def normalize(row: dict[str, Any], field_map: dict[str, tuple[str, ...]] | None 
     if not external_id:
         raise SkippedOrder("немає жодного з полів-ідентифікаторів", row)
 
-    phone = clean_phone(first_value(row, fmap["phone"]))
-    email = clean_email(first_value(row, fmap["email"]))
-    if not phone and not email:
+    raw_phone = first_value(row, fmap["phone"])
+    raw_email = first_value(row, fmap["email"])
+    raw_name = first_value(row, fmap["full_name"])
+    masked = is_masked(raw_phone, raw_email, raw_name)
+
+    phone = clean_phone(raw_phone)
+    email = clean_email(raw_email)
+    if not masked and not phone and not email:
         raise SkippedOrder("немає ні телефону, ні e-mail", row)
 
     first_name = first_value(row, fmap["first_name"])
@@ -233,6 +261,12 @@ def normalize(row: dict[str, Any], field_map: dict[str, tuple[str, ...]] | None 
         object_title=first_value(row, fmap["object_title"]),
         object_url=first_value(row, fmap["object_url"]),
         source_type=first_value(row, fmap["source_type"]) or "realting_order",
+        region=first_value(row, fmap["region"]),
+        status=first_value(row, fmap["status"]),
+        object_price=first_value(row, fmap["object_price"]),
+        object_type=first_value(row, fmap["object_type"]),
+        received_at=first_value(row, fmap["received_at"]),
+        masked=masked,
         utm_source=first_value(row, fmap["utm_source"]),
         utm_medium=first_value(row, fmap["utm_medium"]),
         utm_campaign=first_value(row, fmap["utm_campaign"]),
@@ -243,6 +277,7 @@ def normalize(row: dict[str, Any], field_map: dict[str, tuple[str, ...]] | None 
 def normalize_all(
     rows: Iterable[dict[str, Any]],
     field_map: dict[str, tuple[str, ...]] | None = None,
+    skip_masked: bool = True,
 ) -> tuple[list[Lead], list[SkippedOrder]]:
     leads: list[Lead] = []
     skipped: list[SkippedOrder] = []
@@ -252,6 +287,11 @@ def normalize_all(
             lead = normalize(row, field_map)
         except SkippedOrder as exc:
             skipped.append(exc)
+            continue
+        if lead.masked and skip_masked:
+            skipped.append(SkippedOrder(
+                "контакти замасковані Realting (заявка не прийнята в роботу)", row
+            ))
             continue
         if lead.external_id in seen:          # дубль у межах однієї відповіді
             continue

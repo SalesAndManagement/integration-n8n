@@ -77,9 +77,20 @@ class RealtingClient:
         seen_signatures: set[str] = set()
 
         for page in range(1, cfg.max_pages + 1 if cfg.pagination == "page" else 2):
-            rows = extract_rows(self.fetch_raw(date_from, date_to, page))
+            payload = self.fetch_raw(date_from, date_to, page)
+            rows = extract_rows(payload)
             if not rows:
                 break
+
+            # Realting повертає meta: {"page":1,"limit":200,"total":87,"pages":1} —
+            # коли вона є, довіряємо їй, а не евристиці «неповна сторінка».
+            meta = payload.get("meta") if isinstance(payload, dict) else None
+            total_pages = None
+            if isinstance(meta, dict):
+                try:
+                    total_pages = int(meta.get("pages"))
+                except (TypeError, ValueError):
+                    total_pages = None
 
             signature = repr(sorted(str(sorted(r.items(), key=str)) for r in rows))[:2000]
             if signature in seen_signatures:
@@ -91,7 +102,13 @@ class RealtingClient:
             collected.extend(rows)
             log.debug("сторінка %s: %s заявок", page, len(rows))
 
-            if cfg.pagination == "none" or len(rows) < cfg.page_size:
+            if cfg.pagination == "none":
+                break
+            if total_pages is not None:
+                if page >= total_pages:
+                    break
+                continue
+            if len(rows) < cfg.page_size:
                 break
 
         return collected

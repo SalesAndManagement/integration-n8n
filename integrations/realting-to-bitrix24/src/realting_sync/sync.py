@@ -110,7 +110,7 @@ class Synchronizer:
 
         rows = self.realting.fetch_orders(date_from, date_to)
         report.fetched = len(rows)
-        leads, skipped = normalize_all(rows, self._field_map)
+        leads, skipped = normalize_all(rows, self._field_map, self.config.skip_masked)
         report.skipped = len(skipped)
         for item in skipped:
             log.info("пропущено заявку (%s): %s", item.reason, _short(item.raw))
@@ -162,7 +162,7 @@ class Synchronizer:
                 log.error("запис черги #%s не є JSON (%s) — пропускаю", row["id"], exc)
                 continue
 
-            leads, skipped = normalize_all(extract_rows(payload), self._field_map)
+            leads, skipped = normalize_all(extract_rows(payload), self._field_map, self.config.skip_masked)
             if skipped:
                 for item in skipped:
                     log.info("хук #%s: пропущено заявку (%s): %s", row["id"], item.reason, _short(item.raw))

@@ -106,8 +106,27 @@ def cmd_probe(config: Config, args: argparse.Namespace) -> int:
     if rows:
         print("Поля першої заявки:", ", ".join(sorted(rows[0].keys())))
 
-    leads, skipped = normalize_all(rows, load_field_map(config.field_map_file))
-    print(f"\n=== Після мапінгу: {len(leads)} придатних, {len(skipped)} пропущено ===")
+    field_map = load_field_map(config.field_map_file)
+
+    # Зріз по статусах і маскуванню: Realting ховає контакти заявок,
+    # не прийнятих у роботу, і саме це вирішує, чи є що імпортувати.
+    all_leads, _ = normalize_all(rows, field_map, skip_masked=False)
+    if all_leads:
+        statuses: dict[str, int] = {}
+        masked_count = 0
+        for lead in all_leads:
+            statuses[lead.status or "—"] = statuses.get(lead.status or "—", 0) + 1
+            if lead.masked:
+                masked_count += 1
+        print("\n=== Статуси заявок ===")
+        for status, count in sorted(statuses.items(), key=lambda item: -item[1]):
+            print(f"  {count:>4}  {status}")
+        print(f"\nЗ відкритими контактами: {len(all_leads) - masked_count} із {len(all_leads)}")
+        if masked_count:
+            print(f"Замасковано Realting (у CRM не поїдуть): {masked_count}")
+
+    leads, skipped = normalize_all(rows, field_map, config.skip_masked)
+    print(f"\n=== Придатних до імпорту: {len(leads)}, пропущено: {len(skipped)} ===")
     for lead in leads[:3]:
         data = lead.to_dict()
         data.pop("raw", None)
@@ -115,7 +134,15 @@ def cmd_probe(config: Config, args: argparse.Namespace) -> int:
     for item in skipped[:3]:
         print(f"пропущено ({item.reason}): {json.dumps(item.raw, ensure_ascii=False)[:300]}")
     if rows and not leads:
-        print("\nЖодна заявка не змапилась — додайте власні шляхи у файл REALTING_FIELD_MAP_FILE.")
+        if all_leads and all(lead.masked for lead in all_leads):
+            print(
+                "\nУсі заявки замасковані: Realting відкриває контакти лише після прийняття "
+                "заявки в роботу. Інтеграція готова — щойно зʼявиться заявка з відкритими "
+                "контактами, вона поїде в CRM. Щоб усе ж вантажити замасковані, "
+                "виставте SKIP_MASKED=false."
+            )
+        else:
+            print("\nЖодна заявка не змапилась — додайте власні шляхи у файл REALTING_FIELD_MAP_FILE.")
     return 0
 
 

@@ -1,25 +1,43 @@
 # Мапінг полів: Realting → Bitrix24 (LEAD)
 
+> Формат підтверджено бойовою відповіддю `/api/orders/export`.
+
 > Ліва колонка — **припущені** назви полів Realting. Точні назви видно у першому ж
 > реальному хуку (`journalctl -u realting-webhook`, або таблиця `inbox` у стані),
 > а для режиму поллінгу — командою `realting-sync probe`. Модуль `normalize.py` шукає значення за списком варіантів, тому
 > більшість типових назв підхопиться сама; решту не треба правити в коді — допишіть
 > власні шляхи у файл `REALTING_FIELD_MAP_FILE` (JSON `{"поле": ["шлях.у.відповіді"]}`).
 
-| Realting (варіанти назв)                   | Канонічне поле | Bitrix24 (crm.lead.add) | Примітка |
-|--------------------------------------------|----------------|--------------------------|----------|
-| `id`, `order_id`, `uuid`, `number`         | `externalId`   | `UF_CRM_REALTING_ID`     | ключ ідемпотентності, обовʼязковий |
-| `created_at`, `date`, `date_create`        | `createdAt`    | → в `COMMENTS`           | час створення на боці Realting |
-| `name`, `full_name`, `contact_name`        | `fullName`     | `NAME` + `LAST_NAME`     | розбивається по першому пробілу |
-| `phone`, `contact_phone`, `client.phone`   | `phone`        | `PHONE[0].VALUE`         | чистка до `+` і цифр |
-| `email`, `contact_email`                   | `email`        | `EMAIL[0].VALUE`         | нижній регістр |
-| `message`, `comment`, `text`               | `comment`      | → в `COMMENTS`           | |
-| `object_id`, `property_id`, `listing_id`   | `objectId`     | → в `COMMENTS`           | краще винести в окреме UF-поле |
-| `object_title`, `title`                    | `objectTitle`  | `TITLE` (суфікс)         | |
-| `object_url`, `url`, `link`                | `objectUrl`    | → в `COMMENTS`           | клікабельне посилання на обʼєкт |
-| `language`, `lang`                         | `language`     | → в `COMMENTS`           | корисно для маршрутизації на менеджера |
-| `utm_source` / `utm_medium` / `utm_campaign` | `utm*`       | `UTM_SOURCE` / `UTM_MEDIUM` / `UTM_CAMPAIGN` | якщо порожні → `realting.com` / `referral` |
-| весь оригінальний обʼєкт                   | `raw`          | —                        | доступний у логах (`LOG_LEVEL=DEBUG`) |
+| Realting (реальне поле)      | Канонічне      | Bitrix24 (crm.lead.add)  | Примітка |
+|------------------------------|----------------|--------------------------|----------|
+| `id`                         | `external_id`  | `UF_CRM_REALTING_ID`     | ключ ідемпотентності |
+| `name`                       | `first_name` + `last_name` | `NAME`, `LAST_NAME` | ділиться по першому пробілу |
+| `phone`                      | `phone`        | `PHONE[0].VALUE`         | чистка до `+` і цифр |
+| `email`                      | `email`        | `EMAIL[0].VALUE`         | нижній регістр, перевірка формату |
+| `message`                    | `comment`      | → в `COMMENTS`           | |
+| `region`                     | `region`       | → в `COMMENTS`           | країна клієнта |
+| `lang_code` → `lang_title`   | `language`     | → в `COMMENTS`           | `lang_code` буває `null` |
+| `status_title`               | `status`       | → в `COMMENTS`           | напр. `In work` |
+| `object.id`                  | `object_id`    | → в `COMMENTS`           | |
+| `object.title`               | `object_title` | `TITLE` (суфікс)         | |
+| `object.url`                 | `object_url`   | → в `COMMENTS`           | |
+| `object.price`               | `object_price` | → в `COMMENTS`           | рядком, напр. `$312 455` |
+| `object.type_title`          | `object_type`  | → в `COMMENTS`           | `Properties` / `Users` |
+| `utm.source` / `.medium` / `.campaign` | `utm_*` | `UTM_SOURCE` / `UTM_MEDIUM` / `UTM_CAMPAIGN` | порожні → `realting.com` / `referral` |
+| `created_at`                 | `created_at`   | → в `COMMENTS`           | |
+| `received_at`                | `received_at`  | → в `COMMENTS`           | лише якщо відрізняється |
+| весь оригінальний обʼєкт     | `raw`          | —                        | у логах при `LOG_LEVEL=DEBUG` |
+
+Конверт відповіді: `{"success": true, "meta": {"page","limit","total","pages"}, "data": [...]}`.
+Пагінація йде за `meta.pages`; `{"success": false}` з кодом 200 — це помилка, а не заявки.
+
+## Маскування контактів
+
+Заявки зі статусом на кшталт `Request not accepted to work` приходять із затертими
+контактами: `"name": "Ник***"`, `"phone": "+790******21"`, `"email": "n***@gmail.com"`.
+Такі заявки **не імпортуються** (`SKIP_MASKED=true`): менеджеру нікуди дзвонити, а зайнятий
+`UF_CRM_REALTING_ID` завадив би імпортувати ту саму заявку пізніше, коли контакти відкриються.
+Скільки таких — показує `realting-sync probe` у зрізі за статусами.
 
 Константи, які проставляються завжди:
 

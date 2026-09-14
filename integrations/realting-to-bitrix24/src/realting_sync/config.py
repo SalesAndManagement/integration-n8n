@@ -107,6 +107,7 @@ class Config:
     overlap_minutes: int = 15
     first_run_days: int = 7
     field_map_file: Path | None = None
+    skip_masked: bool = True
     log_level: str = "INFO"
 
     @classmethod
@@ -217,5 +218,6 @@ class Config:
             overlap_minutes=get_int("SYNC_OVERLAP_MINUTES", 15),
             first_run_days=get_int("SYNC_FIRST_RUN_DAYS", 7),
             field_map_file=Path(field_map) if field_map else None,
+            skip_masked=_bool(get("SKIP_MASKED"), True),
             log_level=get("LOG_LEVEL", "INFO").upper(),
         )

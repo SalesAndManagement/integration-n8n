@@ -144,10 +144,15 @@ def lead_comment(lead: Lead) -> str:
     lines = [
         f"Повідомлення: {lead.comment}" if lead.comment else "",
         f"Обʼєкт: {lead.object_title}" if lead.object_title else "",
+        f"Ціна: {lead.object_price}" if lead.object_price else "",
+        f"Тип: {lead.object_type}" if lead.object_type else "",
         f"Посилання: {lead.object_url}" if lead.object_url else "",
         f"ID обʼєкта: {lead.object_id}" if lead.object_id else "",
+        f"Регіон клієнта: {lead.region}" if lead.region else "",
         f"Мова заявки: {lead.language}" if lead.language else "",
+        f"Статус на Realting: {lead.status}" if lead.status else "",
         f"Створено на Realting: {lead.created_at}" if lead.created_at else "",
+        f"Отримано: {lead.received_at}" if lead.received_at and lead.received_at != lead.created_at else "",
         f"Realting ID: {lead.external_id}",
     ]
     return "\n".join(line for line in lines if line)
