@@ -227,3 +227,71 @@ class ParseMomentTest(unittest.TestCase):
 
         self.assertIsNone(parse_moment(""))
         self.assertIsNone(parse_moment("вчора"))
+
+
+class SeedTest(unittest.TestCase):
+    """Старт «тільки нові»: історію позначаємо, але в CRM не вантажимо."""
+
+    OPEN_OLD = {"id": 1, "name": "Олена", "phone": "+380671234567", "created_at": "2025-03-16 01:16:06",
+                "status_title": "Request accepted to work"}
+    MASKED = {"id": 2, "name": "Ник***", "phone": "+790******21", "email": "n***@gmail.com",
+              "created_at": "2026-09-01 00:15:15", "status_title": "Request not accepted to work"}
+
+    def test_seed_marks_open_orders_without_touching_crm(self):
+        syncer, state, bitrix = build([self.OPEN_OLD, self.MASKED])
+        marked = syncer.seed()
+        self.assertEqual(marked, 1)
+        self.assertEqual(bitrix.added, [])
+        self.assertTrue(state.is_processed("1"))
+
+    def test_masked_order_is_not_marked_and_arrives_when_it_opens(self):
+        syncer, state, bitrix = build([self.OPEN_OLD, self.MASKED])
+        syncer.seed()
+        self.assertFalse(state.is_processed("2"))          # замаскована лишається «небаченою»
+
+        # Realting прийняв заявку в роботу: контакти відкрились, дата створення стара
+        opened = {**self.MASKED, "name": "Микола", "phone": "+380509998877", "email": "m@example.com",
+                  "status_title": "Request accepted to work"}
+        syncer.realting.rows = [self.OPEN_OLD, opened]
+        report = syncer.run(whole_archive=True)
+        self.assertEqual(report.created, 1)
+        self.assertEqual([lead.external_id for lead in bitrix.added], ["2"])
+
+    def test_seed_is_idempotent(self):
+        syncer, state, _ = build([self.OPEN_OLD])
+        self.assertEqual(syncer.seed(), 1)
+        self.assertEqual(syncer.seed(), 0)
+
+    def test_after_seed_nothing_historical_reaches_crm(self):
+        syncer, state, bitrix = build([self.OPEN_OLD, self.MASKED])
+        syncer.seed()
+        report = syncer.run(whole_archive=True)
+        self.assertEqual(report.created, 0)
+        self.assertEqual(report.already_in_crm, 1)
+        self.assertEqual(bitrix.added, [])
+
+    def test_brand_new_order_after_seed_is_imported(self):
+        syncer, state, bitrix = build([self.OPEN_OLD])
+        syncer.seed()
+        syncer.realting.rows = [self.OPEN_OLD, {"id": 99, "name": "Нова Заявка", "phone": "+380631112233",
+                                                "created_at": "2026-09-14 12:00:00"}]
+        report = syncer.run(whole_archive=True)
+        self.assertEqual(report.created, 1)
+        self.assertEqual(bitrix.added[0].external_id, "99")
+
+
+class WholeArchiveConfigTest(unittest.TestCase):
+    def test_config_flag_switches_off_the_date_window(self):
+        config = make_config(whole_archive=True)
+        old = {"id": 1, "phone": "+380671234567", "created_at": "2025-01-01 00:00:00"}
+        syncer, _, bitrix = build([old], config=config)
+        report = syncer.run(until=datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc))
+        self.assertEqual(report.created, 1)
+        self.assertEqual(report.out_of_window, 0)
+
+    def test_explicit_flag_overrides_config(self):
+        config = make_config(whole_archive=True)
+        old = {"id": 1, "phone": "+380671234567", "created_at": "2025-01-01 00:00:00"}
+        syncer, _, _ = build([old], config=config)
+        report = syncer.run(until=datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc), whole_archive=False)
+        self.assertEqual(report.out_of_window, 1)

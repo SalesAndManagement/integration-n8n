@@ -16,6 +16,7 @@ from .state import SyncState
 log = logging.getLogger(__name__)
 
 CREATED = "created"
+BASELINE = "baseline"
 DUPLICATE = "duplicate"
 ALREADY_IN_CRM = "already_in_crm"
 SKIPPED = "skipped"
@@ -128,7 +129,7 @@ class Synchronizer:
         until: datetime | None = None,
         dry_run: bool = False,
         force: bool = False,
-        whole_archive: bool = False,
+        whole_archive: bool | None = None,
     ) -> SyncReport:
         date_from, date_to = self.window(since, until)
         report = SyncReport(date_from=date_from, date_to=date_to, dry_run=dry_run)
@@ -143,7 +144,7 @@ class Synchronizer:
         # Експорт Realting не звужується параметрами дат — він щоразу віддає весь
         # архів заявок. Тому вікно застосовуємо самі, інакше перший же прогін
         # завантажив би в CRM усі історичні заявки.
-        if not whole_archive:
+        if not (self.config.whole_archive if whole_archive is None else whole_archive):
             within: list[Lead] = []
             for lead in leads:
                 created = parse_moment(lead.created_at)
@@ -175,6 +176,25 @@ class Synchronizer:
             self.state.set_last_sync(date_to)
 
         return report
+
+    def seed(self) -> int:
+        """Позначає наявні заявки з відкритими контактами як уже оброблені.
+
+        Потрібно на старті: історію в CRM не вантажимо, але й не хочемо, щоб вона
+        поїхала туди при першому ж прогоні. Заявки із замаскованими контактами
+        свідомо НЕ позначаємо — коли Realting їх відкриє, вони приїдуть як нові.
+        """
+        rows = self.realting.fetch_orders(
+            datetime.now(timezone.utc) - timedelta(days=3650), datetime.now(timezone.utc)
+        )
+        leads, _ = normalize_all(rows, self._field_map, self.config.skip_masked)
+        marked = 0
+        for lead in leads:
+            if not self.state.is_processed(lead.external_id):
+                self.state.mark_processed(lead.external_id, BASELINE, None)
+                marked += 1
+        self.state.set_last_sync(datetime.now(timezone.utc))
+        return marked
 
     def drain(self, limit: int = 50, now: datetime | None = None) -> DrainReport:
         """Обробляє чергу вхідних хуків: кожен запис → ліди в Bitrix24.

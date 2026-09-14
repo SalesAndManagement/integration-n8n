@@ -63,6 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_drain.add_argument("--limit", type=int, default=50, help="скільки записів узяти за раз")
     p_drain.add_argument("--retry-failed", action="store_true", help="повернути в чергу записи зі статусом failed")
 
+    sub.add_parser("seed", help="позначити наявні заявки як оброблені, не створюючи лідів")
     sub.add_parser("check", help="перевірити конфіг, доступ до Realting і до Bitrix24")
     sub.add_parser("stats", help="стан локальної бази синхронізації")
     return parser
@@ -223,6 +224,19 @@ def cmd_drain(config: Config, args: argparse.Namespace) -> int:
     return 0 if not report.failed else 1
 
 
+def cmd_seed(config: Config, args: argparse.Namespace) -> int:
+    if not config.realting.url:
+        log.error("REALTING_EXPORT_URL не заданий — нема звідки брати перелік заявок")
+        return 2
+    with SyncState(config.state_path) as state:
+        syncer = Synchronizer(config, RealtingClient(config.realting), BitrixClient(config.bitrix), state)
+        marked = syncer.seed()
+    print(f"Позначено як уже оброблені: {marked}")
+    print("У CRM нічого не створено. Замасковані заявки не позначались — коли Realting")
+    print("відкриє їхні контакти, вони приїдуть у CRM як нові.")
+    return 0
+
+
 def cmd_check(config: Config, args: argparse.Namespace) -> int:
     ok = True
     print(f"Realting URL:      {config.realting.url or '— (режим приймання хуків)'}")
@@ -301,6 +315,7 @@ def main(argv: list[str] | None = None) -> int:
 
     handlers = {
         "sync": cmd_sync,
+        "seed": cmd_seed,
         "serve": cmd_serve,
         "drain": cmd_drain,
         "probe": cmd_probe,

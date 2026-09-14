@@ -1,5 +1,5 @@
 [Unit]
-Description=Разбір черги заявок realting.com кожні 5 хвилин
+Description=Черга хуків + опитування експорту realting.com кожні 5 хвилин
 
 [Timer]
 OnBootSec=2min

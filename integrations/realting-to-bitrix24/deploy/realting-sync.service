@@ -1,5 +1,5 @@
 [Unit]
-Description=Доставка відкладених заявок realting.com у Bitrix24
+Description=Розбір черги хуків + опитування експорту realting.com
 Documentation=https://github.com/SalesAndManagement/integration-n8n
 After=network-online.target
 Wants=network-online.target
@@ -13,6 +13,7 @@ Environment=PYTHONPATH=/opt/realting-sync/src
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/etc/realting-sync.env
 ExecStart=/usr/bin/python3 -m realting_sync drain
+ExecStart=/usr/bin/python3 -m realting_sync sync
 TimeoutStartSec=600
 
 # Ізоляція: сервісу потрібні лише власний каталог стану й мережа
