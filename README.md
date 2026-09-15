@@ -29,6 +29,18 @@ If you’re looking to run the conversion yourself, check out `convert_txt_to_js
 
 ---
 
+## 🚀 Self-hosting n8n
+
+Need an n8n instance to run these workflows on? The [`deploy/`](deploy/) folder contains a
+production-ready stack — n8n + PostgreSQL 16 + Caddy with automatic HTTPS, plus server
+bootstrap, backup and update scripts. See [`deploy/README.md`](deploy/README.md).
+
+```bash
+cd deploy && cp .env.example .env && nano .env && docker compose up -d
+```
+
+---
+
 ## 🛠 Usage Instructions
 
 To import a workflow into your own n8n instance:

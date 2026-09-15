@@ -1,0 +1,153 @@
+name: n8n
+
+x-n8n-env: &n8n-env
+  # --- База даних ---
+  DB_TYPE: postgresdb
+  DB_POSTGRESDB_HOST: postgres
+  DB_POSTGRESDB_PORT: 5432
+  DB_POSTGRESDB_DATABASE: ${POSTGRES_DB}
+  DB_POSTGRESDB_USER: ${POSTGRES_NON_ROOT_USER}
+  DB_POSTGRESDB_PASSWORD: ${POSTGRES_NON_ROOT_PASSWORD}
+  DB_POSTGRESDB_SCHEMA: public
+  DB_POSTGRESDB_POOL_SIZE: ${DB_POSTGRESDB_POOL_SIZE:-4}
+
+  # --- Ключ шифрування credentials. Втратите — втратите всі збережені доступи ---
+  N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+
+  # --- Адреси / проксі ---
+  N8N_HOST: ${N8N_DOMAIN}
+  N8N_PORT: 5678
+  N8N_PROTOCOL: https
+  N8N_EDITOR_BASE_URL: https://${N8N_DOMAIN}
+  WEBHOOK_URL: https://${N8N_DOMAIN}/
+  N8N_PROXY_HOPS: 1
+  N8N_SECURE_COOKIE: "true"
+
+  # --- Час ---
+  GENERIC_TIMEZONE: ${TIMEZONE:-Europe/Kyiv}
+  TZ: ${TIMEZONE:-Europe/Kyiv}
+
+  # --- Виконання та очищення історії ---
+  EXECUTIONS_DATA_SAVE_ON_SUCCESS: ${EXECUTIONS_DATA_SAVE_ON_SUCCESS:-all}
+  EXECUTIONS_DATA_SAVE_ON_ERROR: all
+  EXECUTIONS_DATA_SAVE_ON_PROGRESS: "false"
+  EXECUTIONS_DATA_PRUNE: "true"
+  EXECUTIONS_DATA_MAX_AGE: ${EXECUTIONS_DATA_MAX_AGE:-336}
+  EXECUTIONS_DATA_PRUNE_MAX_COUNT: ${EXECUTIONS_DATA_PRUNE_MAX_COUNT:-50000}
+
+  # --- Безпека / телеметрія ---
+  N8N_BLOCK_ENV_ACCESS_IN_NODE: "true"
+  N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+  N8N_DIAGNOSTICS_ENABLED: ${N8N_DIAGNOSTICS_ENABLED:-false}
+  N8N_VERSION_NOTIFICATIONS_ENABLED: "true"
+  N8N_RUNNERS_ENABLED: "true"
+  N8N_LOG_LEVEL: ${N8N_LOG_LEVEL:-info}
+
+  # --- Черга (вмикається профілем queue) ---
+  EXECUTIONS_MODE: ${EXECUTIONS_MODE:-regular}
+  QUEUE_BULL_REDIS_HOST: redis
+  QUEUE_BULL_REDIS_PORT: 6379
+  QUEUE_HEALTH_CHECK_ACTIVE: "true"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_NON_ROOT_USER: ${POSTGRES_NON_ROOT_USER}
+      POSTGRES_NON_ROOT_PASSWORD: ${POSTGRES_NON_ROOT_PASSWORD}
+      TZ: ${TIMEZONE:-Europe/Kyiv}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init-data.sh:/docker-entrypoint-initdb.d/init-data.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [internal]
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:${N8N_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment: *n8n-env
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - n8n_files:/files
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:5678/healthz || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks: [internal, web]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      N8N_DOMAIN: ${N8N_DOMAIN}
+      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - n8n
+    networks: [web]
+
+  # Нижче — опційні сервіси для режиму черги (кілька паралельних воркерів).
+  # Вмикаються лише разом: profiles + EXECUTIONS_MODE=queue у .env
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    profiles: [queue]
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+
+  n8n-worker:
+    image: docker.n8n.io/n8nio/n8n:${N8N_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    profiles: [queue]
+    command: ["worker", "--concurrency=${N8N_WORKER_CONCURRENCY:-5}"]
+    environment: *n8n-env
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - n8n_files:/files
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [internal, web]
+
+volumes:
+  postgres_data:
+  n8n_data:
+  n8n_files:
+  caddy_data:
+  caddy_config:
+  redis_data:
+
+networks:
+  internal:
+    internal: true
+  web:

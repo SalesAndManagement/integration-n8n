@@ -1,0 +1,28 @@
+{
+	email {$LETSENCRYPT_EMAIL}
+	# Для тестів розкоментуйте наступний рядок, щоб не впертись у ліміти Let's Encrypt:
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+{$N8N_DOMAIN} {
+	encode zstd gzip
+
+	reverse_proxy n8n:5678 {
+		# -1 вимикає буферизацію: потрібно для SSE/WebSocket (живі логи виконань)
+		flush_interval -1
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}
