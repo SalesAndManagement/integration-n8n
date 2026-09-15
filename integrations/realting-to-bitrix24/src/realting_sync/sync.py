@@ -194,12 +194,16 @@ class Synchronizer:
         rows = self.realting.fetch_orders(
             datetime.now(timezone.utc) - timedelta(days=3650), datetime.now(timezone.utc)
         )
-        leads, _ = normalize_all(rows, self._field_map, self.config.skip_masked)
+        # Беремо і замасковані теж, але позначаємо їх інакше: як MASKED, а не BASELINE.
+        # Завдяки цьому заявка, якій Realting відкриє контакти, все одно приїде в CRM,
+        # тоді як історія з уже відкритими контактами лишиться позаду назавжди.
+        leads, _ = normalize_all(rows, self._field_map, skip_masked=False)
         marked = 0
         for lead in leads:
-            if not self.state.is_processed(lead.external_id):
-                self.state.mark_processed(lead.external_id, BASELINE, None)
-                marked += 1
+            if self.state.is_processed(lead.external_id):
+                continue
+            self.state.mark_processed(lead.external_id, MASKED if lead.masked else BASELINE, None)
+            marked += 1
         self.state.set_last_sync(datetime.now(timezone.utc))
         return marked
 

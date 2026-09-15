@@ -258,17 +258,19 @@ class SeedTest(unittest.TestCase):
     MASKED = {"id": 2, "name": "Ник***", "phone": "+790******21", "email": "n***@gmail.com",
               "created_at": "2026-09-01 00:15:15", "status_title": "Request not accepted to work"}
 
-    def test_seed_marks_open_orders_without_touching_crm(self):
+    def test_seed_marks_orders_without_touching_crm(self):
         syncer, state, bitrix = build([self.OPEN_OLD, self.MASKED])
         marked = syncer.seed()
-        self.assertEqual(marked, 1)
+        self.assertEqual(marked, 2)
         self.assertEqual(bitrix.added, [])
-        self.assertTrue(state.is_processed("1"))
+        # відкрита історія — назавжди позаду; замаскована — з правом приїхати пізніше
+        self.assertEqual(state.get_outcome("1")[0], "baseline")
+        self.assertEqual(state.get_outcome("2")[0], "masked")
 
-    def test_masked_order_is_not_marked_and_arrives_when_it_opens(self):
+    def test_masked_order_arrives_when_it_opens(self):
         syncer, state, bitrix = build([self.OPEN_OLD, self.MASKED])
         syncer.seed()
-        self.assertFalse(state.is_processed("2"))          # замаскована лишається «небаченою»
+        self.assertEqual(state.get_outcome("2")[0], "masked")   # позначена, але не закрита назавжди
 
         # Realting прийняв заявку в роботу: контакти відкрились, дата створення стара
         opened = {**self.MASKED, "name": "Микола", "phone": "+380509998877", "email": "m@example.com",
@@ -279,8 +281,8 @@ class SeedTest(unittest.TestCase):
         self.assertEqual([lead.external_id for lead in bitrix.added], ["2"])
 
     def test_seed_is_idempotent(self):
-        syncer, state, _ = build([self.OPEN_OLD])
-        self.assertEqual(syncer.seed(), 1)
+        syncer, state, _ = build([self.OPEN_OLD, self.MASKED])
+        self.assertEqual(syncer.seed(), 2)
         self.assertEqual(syncer.seed(), 0)
 
     def test_after_seed_nothing_historical_reaches_crm(self):
@@ -392,3 +394,44 @@ class MaskedImportTest(unittest.TestCase):
         report = syncer.run()
         self.assertEqual(report.updated, 1)
         self.assertEqual(bitrix.updated[0][0], "900")
+
+
+class SeedWithMaskedTest(unittest.TestCase):
+    """seed має лишити замаскованим заявкам шанс приїхати, коли контакти відкриються."""
+
+    OPEN_OLD = {"id": 1, "name": "Олена", "phone": "+380671234567", "created_at": "2025-03-16 01:16:06"}
+    MASKED_OLD = {"id": 2, "name": "Ник***", "phone": "+790******21", "email": "n***@gmail.com",
+                  "created_at": "2026-06-01 00:00:00"}
+
+    def test_seed_marks_both_kinds(self):
+        syncer, state, _ = build([self.OPEN_OLD, self.MASKED_OLD])
+        self.assertEqual(syncer.seed(), 2)
+        self.assertEqual(state.get_outcome("1")[0], "baseline")
+        self.assertEqual(state.get_outcome("2")[0], "masked")
+
+    def test_seeded_open_order_never_comes_back(self):
+        syncer, state, bitrix = build([self.OPEN_OLD], config=make_config(whole_archive=True))
+        syncer.seed()
+        report = syncer.run()
+        self.assertEqual(report.created, 0)
+        self.assertEqual(bitrix.added, [])
+
+    def test_seeded_masked_order_arrives_once_its_contacts_open(self):
+        syncer, state, bitrix = build([self.MASKED_OLD], config=make_config(whole_archive=True))
+        syncer.seed()
+
+        opened = {"id": 2, "name": "Микола Іваненко", "phone": "+380509998877",
+                  "email": "m@example.com", "created_at": "2026-06-01 00:00:00"}
+        syncer.realting.rows = [opened]
+        report = syncer.run()
+
+        self.assertEqual(report.created, 1)
+        self.assertEqual(bitrix.added[0].external_id, "2")
+        self.assertEqual(bitrix.added[0].phone, "+380509998877")
+
+    def test_seeded_masked_order_stays_put_while_still_masked(self):
+        syncer, state, bitrix = build([self.MASKED_OLD], config=make_config(whole_archive=True))
+        syncer.seed()
+        report = syncer.run()
+        self.assertEqual((report.created, report.already_in_crm), (0, 0))
+        self.assertEqual(bitrix.added, [])
