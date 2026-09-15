@@ -108,6 +108,7 @@ class Config:
     first_run_days: int = 7
     field_map_file: Path | None = None
     skip_masked: bool = True
+    import_masked: bool = False
     whole_archive: bool = False
     log_level: str = "INFO"
 
@@ -219,7 +220,8 @@ class Config:
             overlap_minutes=get_int("SYNC_OVERLAP_MINUTES", 15),
             first_run_days=get_int("SYNC_FIRST_RUN_DAYS", 7),
             field_map_file=Path(field_map) if field_map else None,
-            skip_masked=_bool(get("SKIP_MASKED"), True),
+            skip_masked=not _bool(get("IMPORT_MASKED"), False) and _bool(get("SKIP_MASKED"), True),
+            import_masked=_bool(get("IMPORT_MASKED"), False),
             whole_archive=_bool(get("SYNC_WHOLE_ARCHIVE"), False),
             log_level=get("LOG_LEVEL", "INFO").upper(),
         )

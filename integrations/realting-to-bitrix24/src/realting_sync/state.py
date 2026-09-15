@@ -83,6 +83,14 @@ class SyncState:
         )
         self._conn.commit()
 
+    def get_outcome(self, external_id: str) -> tuple[str, str | None] | None:
+        """(outcome, bitrix_lead_id) для вже обробленої заявки, або None."""
+        with closing(self._conn.execute(
+            "SELECT outcome, bitrix_lead_id FROM processed_orders WHERE external_id = ?", (external_id,)
+        )) as cur:
+            row = cur.fetchone()
+            return (row["outcome"], row["bitrix_lead_id"]) if row else None
+
     def processed_count(self) -> int:
         with closing(self._conn.execute("SELECT COUNT(*) AS n FROM processed_orders")) as cur:
             return int(cur.fetchone()["n"])

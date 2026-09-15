@@ -24,9 +24,26 @@ class FakeBitrix:
         self.fail_on = set(fail_on)           # external_id, на яких кидати помилку
         self.added = []
         self.comments = []
+        self.updated = []
+
+    def find_lead(self, external_id):
+        row = self.existing.get(external_id)
+        if row is None:
+            return None
+        if isinstance(row, dict):
+            return row
+        return {"ID": row, "HAS_PHONE": "N", "HAS_EMAIL": "N"}
 
     def find_lead_by_external_id(self, external_id):
-        return self.existing.get(external_id)
+        row = self.find_lead(external_id)
+        return None if row is None else str(row["ID"])
+
+    def update_lead(self, lead_id, fields):
+        self.updated.append((lead_id, fields))
+        return True
+
+    def contact_fields(self, lead):
+        return {"PHONE": lead.phone, "EMAIL": lead.email, "NAME": lead.first_name}
 
     def find_duplicate(self, lead):
         return self.duplicates.get(lead.phone)
@@ -36,7 +53,11 @@ class FakeBitrix:
             raise BitrixError("crm.lead.add", "INVALID_FIELD", "тестова помилка")
         self.added.append(lead)
         lead_id = f"lead-{lead.external_id}"
-        self.existing[lead.external_id] = lead_id      # портал знайде його наступного разу
+        self.existing[lead.external_id] = {            # портал знайде його наступного разу
+            "ID": lead_id,
+            "HAS_PHONE": "Y" if (lead.phone and not lead.masked) else "N",
+            "HAS_EMAIL": "Y" if (lead.email and not lead.masked) else "N",
+        }
         return lead_id
 
     def add_timeline_comment(self, lead_id, text):
@@ -100,7 +121,7 @@ class RunTest(unittest.TestCase):
         self.assertEqual(len(bitrix.added), 1)
 
     def test_existing_external_id_in_crm_is_not_duplicated(self):
-        bitrix = FakeBitrix(existing={"1": "900"})
+        bitrix = FakeBitrix(existing={"1": {"ID": "900", "HAS_PHONE": "Y", "HAS_EMAIL": "N"}})
         syncer, state, bitrix = build([{"id": 1, "phone": "+380671234567"}], bitrix=bitrix)
         report = syncer.run()
         self.assertEqual(report.already_in_crm, 1)
@@ -295,3 +316,79 @@ class WholeArchiveConfigTest(unittest.TestCase):
         syncer, _, _ = build([old], config=config)
         report = syncer.run(until=datetime(2026, 9, 14, 12, 0, tzinfo=timezone.utc), whole_archive=False)
         self.assertEqual(report.out_of_window, 1)
+
+
+class MaskedImportTest(unittest.TestCase):
+    """Режим IMPORT_MASKED: лід заводиться одразу, контакти підставляються пізніше."""
+
+    MASKED = {"id": 164070, "name": "Гал***", "phone": "+488******68",
+              "email": "gal***@varemestate.com", "message": "tes***",
+              "status_title": "Request not accepted to work", "created_at": "2026-09-15 15:19:00"}
+    OPENED = {"id": 164070, "name": "Галина Ковальчук", "phone": "+48 888 111 268",
+              "email": "galina@varemestate.com", "message": "Цікавить квартира",
+              "status_title": "Request accepted to work", "created_at": "2026-09-15 15:19:00"}
+
+    def config(self):
+        return make_config(import_masked=True, skip_masked=False, whole_archive=True)
+
+    def test_masked_order_creates_a_lead_without_contact_fields(self):
+        syncer, state, bitrix = build([self.MASKED], config=self.config())
+        report = syncer.run()
+        self.assertEqual(report.created, 1)
+        self.assertEqual(len(bitrix.added), 1)
+        self.assertTrue(bitrix.added[0].masked)
+        self.assertEqual(state.get_outcome("164070")[0], "masked")
+
+    def test_contacts_are_filled_in_when_realting_opens_them(self):
+        syncer, state, bitrix = build([self.MASKED], config=self.config())
+        syncer.run()
+
+        syncer.realting.rows = [self.OPENED]
+        report = syncer.run()
+
+        self.assertEqual(report.updated, 1)
+        self.assertEqual(report.created, 0)
+        self.assertEqual(len(bitrix.added), 1)                  # другого ліда не з'явилось
+        lead_id, fields = bitrix.updated[0]
+        self.assertEqual(lead_id, "lead-164070")
+        self.assertEqual(fields["PHONE"], "+48888111268")
+        self.assertEqual(fields["EMAIL"], "galina@varemestate.com")
+        self.assertEqual(state.get_outcome("164070")[0], "updated")
+
+    def test_still_masked_order_is_not_touched_again(self):
+        syncer, state, bitrix = build([self.MASKED], config=self.config())
+        syncer.run()
+        report = syncer.run()
+        self.assertEqual((report.created, report.updated, report.already_in_crm), (0, 0, 1))
+        self.assertEqual(bitrix.updated, [])
+
+    def test_top_up_happens_only_once(self):
+        syncer, state, bitrix = build([self.MASKED], config=self.config())
+        syncer.run()
+        syncer.realting.rows = [self.OPENED]
+        syncer.run()
+        report = syncer.run()
+        self.assertEqual(report.updated, 0)
+        self.assertEqual(len(bitrix.updated), 1)
+
+    def test_masked_order_does_not_trigger_duplicate_search(self):
+        # шукати дубль за "+488******68" безглуздо і шкідливо
+        bitrix = FakeBitrix(duplicates={"+488******68": "555"})
+        syncer, _, bitrix = build([self.MASKED], bitrix=bitrix, config=self.config())
+        syncer.run()
+        self.assertEqual(bitrix.comments, [])
+        self.assertEqual(len(bitrix.added), 1)
+
+    def test_default_mode_still_skips_masked_orders(self):
+        syncer, state, bitrix = build([self.MASKED])
+        report = syncer.run(whole_archive=True)
+        self.assertEqual((report.created, report.skipped), (0, 1))
+        self.assertEqual(bitrix.added, [])
+
+    def test_lost_state_still_tops_up_by_portal_flags(self):
+        # база стану втрачена, але портал каже, що в ліда немає контактів
+        bitrix = FakeBitrix(existing={"164070": {"ID": "900", "HAS_PHONE": "N", "HAS_EMAIL": "N"}})
+        syncer, state, bitrix = build([self.OPENED], bitrix=bitrix, config=self.config())
+        report = syncer.run()
+        self.assertEqual(report.updated, 1)
+        self.assertEqual(bitrix.updated[0][0], "900")

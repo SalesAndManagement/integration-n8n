@@ -16,6 +16,8 @@ from .state import SyncState
 log = logging.getLogger(__name__)
 
 CREATED = "created"
+MASKED = "masked"
+UPDATED = "updated"
 BASELINE = "baseline"
 DUPLICATE = "duplicate"
 ALREADY_IN_CRM = "already_in_crm"
@@ -31,6 +33,7 @@ class DrainReport:
     created: int = 0
     duplicates: int = 0
     already_in_crm: int = 0
+    updated: int = 0
     skipped: int = 0
     retried: int = 0
     failed: int = 0
@@ -43,7 +46,7 @@ class DrainReport:
     def summary(self) -> str:
         return (
             f"черга: взято {self.taken}, створено {self.created}, дублів {self.duplicates}, "
-            f"вже в CRM {self.already_in_crm}, пропущено {self.skipped}, "
+            f"вже в CRM {self.already_in_crm}, дозаповнено {self.updated}, пропущено {self.skipped}, "
             f"відкладено {self.retried}, провалено {self.failed}"
         )
 
@@ -73,6 +76,7 @@ class SyncReport:
     created: int = 0
     duplicates: int = 0
     already_in_crm: int = 0
+    updated: int = 0
     skipped: int = 0
     out_of_window: int = 0
     failed: int = 0
@@ -91,6 +95,7 @@ class SyncReport:
             f"створено {self.created}",
             f"дублів {self.duplicates}",
             f"вже в CRM {self.already_in_crm}",
+            f"дозаповнено {self.updated}",
             f"пропущено {self.skipped}",
         ]
         if self.out_of_window:
@@ -163,8 +168,10 @@ class Synchronizer:
                 log.error("заявка %s не імпортована: %s", lead.external_id, exc)
                 continue
 
-            if outcome == CREATED:
+            if outcome in (CREATED, MASKED):
                 report.created += 1
+            elif outcome == UPDATED:
+                report.updated += 1
             elif outcome == DUPLICATE:
                 report.duplicates += 1
             elif outcome == ALREADY_IN_CRM:
@@ -244,7 +251,8 @@ class Synchronizer:
                     log.error("хук #%s: вичерпано спроби — %s", row["id"], exc)
                 continue
 
-            report.created += outcomes.count(CREATED)
+            report.created += outcomes.count(CREATED) + outcomes.count(MASKED)
+            report.updated += outcomes.count(UPDATED)
             report.duplicates += outcomes.count(DUPLICATE)
             report.already_in_crm += outcomes.count(ALREADY_IN_CRM)
             with self.state.lock:
@@ -253,21 +261,37 @@ class Synchronizer:
         return report
 
     def process(self, lead: Lead, dry_run: bool = False, force: bool = False) -> str:
-        if not force and self.state.is_processed(lead.external_id):
-            log.debug("заявка %s уже синхронізована — пропускаю", lead.external_id)
-            return ALREADY_IN_CRM
+        known = None if force else self.state.get_outcome(lead.external_id)
+        if known:
+            # Заявку, заведену із закритими контактами, чекаємо дозаповнити —
+            # решту пропускаємо без жодного звернення до порталу.
+            needs_topup = known[0] == MASKED and not lead.masked
+            if not needs_topup:
+                log.debug("заявка %s уже синхронізована — пропускаю", lead.external_id)
+                return ALREADY_IN_CRM
 
         if dry_run:
-            log.info("DRY-RUN: створив би лід %s", self.bitrix.lead_fields(lead))
-            return CREATED
+            action = "дозаповнив би" if known else "створив би"
+            log.info("DRY-RUN: %s лід %s", action, self.bitrix.lead_fields(lead))
+            return UPDATED if known else CREATED
 
-        existing = self.bitrix.find_lead_by_external_id(lead.external_id)
+        existing = self.bitrix.find_lead(lead.external_id)
         if existing:
-            log.info("заявка %s уже є в CRM (лід %s)", lead.external_id, existing)
-            self.state.mark_processed(lead.external_id, ALREADY_IN_CRM, existing)
+            lead_id = str(existing.get("ID"))
+            has_contacts = existing.get("HAS_PHONE") == "Y" or existing.get("HAS_EMAIL") == "Y"
+            if not lead.masked and not has_contacts and (lead.phone or lead.email):
+                # Realting відкрив контакти — підставляємо їх у наявний лід
+                self.bitrix.update_lead(lead_id, self.bitrix.contact_fields(lead))
+                log.info("заявка %s → контакти відкрились, дозаповнено лід %s", lead.external_id, lead_id)
+                self.state.mark_processed(lead.external_id, UPDATED, lead_id)
+                return UPDATED
+            log.info("заявка %s уже є в CRM (лід %s)", lead.external_id, lead_id)
+            self.state.mark_processed(lead.external_id, ALREADY_IN_CRM, lead_id)
             return ALREADY_IN_CRM
 
-        duplicate_id = self.bitrix.find_duplicate(lead) if self.config.bitrix.comment_on_duplicate else None
+        duplicate_id = None
+        if self.config.bitrix.comment_on_duplicate and not lead.masked:
+            duplicate_id = self.bitrix.find_duplicate(lead)
         if duplicate_id:
             self.bitrix.add_timeline_comment(duplicate_id, duplicate_comment(lead))
             log.info("заявка %s — дубль контакту, коментар у лід %s", lead.external_id, duplicate_id)
@@ -275,9 +299,13 @@ class Synchronizer:
             return DUPLICATE
 
         lead_id = self.bitrix.add_lead(lead)
-        log.info("заявка %s → створено лід %s", lead.external_id, lead_id)
-        self.state.mark_processed(lead.external_id, CREATED, lead_id)
-        return CREATED
+        outcome = MASKED if lead.masked else CREATED
+        log.info(
+            "заявка %s → створено лід %s%s",
+            lead.external_id, lead_id, " (контакти ще закриті)" if lead.masked else "",
+        )
+        self.state.mark_processed(lead.external_id, outcome, lead_id)
+        return outcome
 
 
 def _short(value: object, limit: int = 300) -> str:

@@ -71,13 +71,16 @@ line "6. Журнал планових прогонів (за $HOURS год)"
 journalctl -u realting-sync --since "$SINCE" --no-pager -o cat | tail -20 || true
 
 line "7. Доступність ззовні"
-DOMAIN="$(grep -o '^[^ ]*' /etc/caddy/Caddyfile 2>/dev/null | head -1)"
-if [[ -n "${DOMAIN:-}" && "$DOMAIN" != "{\$REALTING_WEBHOOK_DOMAIN}" ]]; then
-  echo -n "  https://$DOMAIN/healthz → "; curl -sS -m 10 "https://$DOMAIN/healthz"; echo
+DOMAIN="$(systemctl show caddy -p Environment --value | tr ' ' '\n' | grep '^REALTING_WEBHOOK_DOMAIN=' | cut -d= -f2)"
+if [[ -z "$DOMAIN" ]]; then
+  DOMAIN="$(grep -oE '^[A-Za-z0-9.-]+\.[A-Za-z]{2,}[[:space:]]*\{' /etc/caddy/Caddyfile 2>/dev/null | head -1 | tr -d ' {')"
+fi
+if [[ -n "$DOMAIN" ]]; then
+  echo -n "  https://$DOMAIN/healthz → "
+  curl -sS -m 10 "https://$DOMAIN/healthz" || echo "недоступний"
+  echo
 else
-  DOMAIN="$(systemctl show caddy -p Environment --value | tr ' ' '\n' | grep REALTING_WEBHOOK_DOMAIN= | cut -d= -f2)"
-  [[ -n "$DOMAIN" ]] && { echo -n "  https://$DOMAIN/healthz → "; curl -sS -m 10 "https://$DOMAIN/healthz"; echo; } \
-                     || echo "  домен не визначено"
+  echo "  домен не визначено (перевірте /etc/caddy/Caddyfile)"
 fi
 
 cat <<'HINT'
@@ -88,5 +91,7 @@ cat <<'HINT'
                            він автентифікується, і треба перемкнути WEBHOOK_AUTH_MODE.
 У розділі 2 статус 404   → слав на інший шлях. Порівняйте з WEBHOOK_PATH.
 У розділі 2 статус 200   → заявка прийнята; дивіться розділ 4 (черга) і 3 (чи не «замаскована»).
-Розділ 5 показує «створено 0, пропущено N» → нові заявки в експорті є, але контакти закриті.
+Розділ 5 показує «створено 0, пропущено N» → нові заявки є, але Realting закрив у них контакти.
+                           Щоб такі заявки все одно потрапляли в CRM (без телефону, з поміткою 🔒,
+                           а контакти підставились пізніше самі) — IMPORT_MASKED=true.
 HINT

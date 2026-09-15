@@ -73,13 +73,21 @@ class BitrixClient:
 
     # --- операції CRM -------------------------------------------------
 
-    def find_lead_by_external_id(self, external_id: str) -> str | None:
+    def find_lead(self, external_id: str) -> dict[str, Any] | None:
+        """Лід із таким Realting ID разом з ознаками, чи є в ньому контакти."""
         result = self.call(
             "crm.lead.list",
-            {"filter": {self.config.external_id_field: external_id}, "select": ["ID"]},
+            {
+                "filter": {self.config.external_id_field: external_id},
+                "select": ["ID", "HAS_PHONE", "HAS_EMAIL"],
+            },
         )
         rows = result or []
-        return str(rows[0]["ID"]) if rows else None
+        return rows[0] if rows else None
+
+    def find_lead_by_external_id(self, external_id: str) -> str | None:
+        row = self.find_lead(external_id)
+        return str(row["ID"]) if row else None
 
     def find_duplicate(self, lead: Lead) -> str | None:
         """ID існуючого ліда з тим самим телефоном (або поштою), якщо є."""
@@ -98,6 +106,13 @@ class BitrixClient:
     def add_lead(self, lead: Lead) -> str:
         result = self.call("crm.lead.add", {"fields": self.lead_fields(lead), "params": {"REGISTER_SONET_EVENT": "N"}})
         return str(result)
+
+    def update_lead(self, lead_id: str, fields: dict[str, Any]) -> bool:
+        result = self.call(
+            "crm.lead.update",
+            {"id": int(lead_id), "fields": fields, "params": {"REGISTER_SONET_EVENT": "N"}},
+        )
+        return bool(result)
 
     def add_timeline_comment(self, lead_id: str, text: str) -> str:
         result = self.call(
@@ -126,6 +141,23 @@ class BitrixClient:
             fields[cfg.external_id_field] = lead.external_id
         if lead.utm_campaign:
             fields["UTM_CAMPAIGN"] = lead.utm_campaign
+        # Замасковані значення ("n***@gmail.com") у поля контактів не пишемо ніколи:
+        # формально e-mail валідний, але дзвонити/писати нікуди.
+        if not lead.masked:
+            if lead.phone:
+                fields["PHONE"] = [{"VALUE": lead.phone, "VALUE_TYPE": "WORK"}]
+            if lead.email:
+                fields["EMAIL"] = [{"VALUE": lead.email, "VALUE_TYPE": "WORK"}]
+        return fields
+
+    def contact_fields(self, lead: Lead) -> dict[str, Any]:
+        """Поля для дозаповнення ліда, коли Realting відкрив контакти."""
+        fields: dict[str, Any] = {
+            "TITLE": lead_title(lead),
+            "NAME": lead.first_name or "Без імені",
+            "LAST_NAME": lead.last_name,
+            "COMMENTS": lead_comment(lead),
+        }
         if lead.phone:
             fields["PHONE"] = [{"VALUE": lead.phone, "VALUE_TYPE": "WORK"}]
         if lead.email:
@@ -134,7 +166,8 @@ class BitrixClient:
 
 
 def lead_title(lead: Lead) -> str:
-    title = f"Realting #{lead.external_id}"
+    prefix = "🔒 " if lead.masked else ""
+    title = f"{prefix}Realting #{lead.external_id}"
     if lead.object_title:
         title = f"{title} — {lead.object_title}"
     return title[:255]
@@ -142,6 +175,8 @@ def lead_title(lead: Lead) -> str:
 
 def lead_comment(lead: Lead) -> str:
     lines = [
+        ("⚠️ Контакти приховані Realting. Прийміть заявку в роботу в кабінеті realting.com — "
+         "після цього телефон і пошта підставляться в цей лід автоматично.") if lead.masked else "",
         f"Повідомлення: {lead.comment}" if lead.comment else "",
         f"Обʼєкт: {lead.object_title}" if lead.object_title else "",
         f"Ціна: {lead.object_price}" if lead.object_price else "",
