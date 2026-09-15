@@ -167,3 +167,30 @@ class ServerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RejectionLoggingTest(unittest.TestCase):
+    """Коли платформа стукає «не так», лог має пояснювати, що саме прийшло."""
+
+    def test_description_lists_auth_material_without_values(self):
+        from realting_sync.webhook import describe_request
+
+        text = describe_request(
+            "POST", "/realting/webhook",
+            {"key": ["s3cret"]},
+            {"X-Api-Key": "s3cret", "Content-Type": "application/json", "User-Agent": "Realting/1.0"},
+            b'{"id": 1}',
+        )
+        self.assertIn("/realting/webhook", text)
+        self.assertIn("x-api-key", text)          # назва заголовка — так
+        self.assertNotIn("s3cret", text)          # значення ключа — ніколи
+        self.assertIn("'key'", text)              # назва параметра URL
+        self.assertIn("9 байт", text)
+        self.assertIn("Realting/1.0", text)
+
+    def test_description_when_nothing_auth_like_is_present(self):
+        from realting_sync.webhook import describe_request
+
+        text = describe_request("POST", "/hook", {}, {"Content-Type": "text/plain"}, b"")
+        self.assertIn("параметри URL: —", text)
+        self.assertIn("заголовки з ключем: —", text)

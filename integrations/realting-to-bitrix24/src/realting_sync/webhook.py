@@ -89,6 +89,30 @@ def verify(config: WebhookConfig, headers: dict[str, str], query: dict[str, list
     return False
 
 
+# Заголовки, якими платформи зазвичай передають ключ. Логуємо ЛИШЕ наявність назв,
+# ніколи не значення — інакше секрет опиниться в журналі.
+AUTH_HEADER_CANDIDATES = (
+    "authorization", "x-api-key", "x-auth-token", "x-token", "x-signature",
+    "x-hub-signature", "x-hub-signature-256", "x-webhook-token", "x-realting-token",
+    "signature", "token", "api-key", "apikey",
+)
+
+
+def describe_request(method: str, path: str, query: dict[str, list[str]],
+                     headers: dict[str, str], body: bytes) -> str:
+    """Опис запиту для журналу: що прийшло, без значень секретів."""
+    lower = {key.lower(): value for key, value in headers.items()}
+    present = [name for name in AUTH_HEADER_CANDIDATES if name in lower]
+    return (
+        f"{method} {path}"
+        f" | параметри URL: {sorted(query) or '—'}"
+        f" | заголовки з ключем: {present or '—'}"
+        f" | Content-Type: {lower.get('content-type', '—')}"
+        f" | тіло: {len(body)} байт"
+        f" | User-Agent: {lower.get('user-agent', '—')}"
+    )
+
+
 class WebhookHandler(BaseHTTPRequestHandler):
     server_version = "realting-sync"
     sys_version = ""
@@ -115,18 +139,27 @@ class WebhookHandler(BaseHTTPRequestHandler):
             return
         if path == self.config.path:
             # багато платформ перевіряють URL звичайним GET перед збереженням
+            log.info("GET на адресу хука з %s (перевірка URL платформою)", self.address_string())
             self._respond(200, {"status": "ok", "hint": "надсилайте заявки методом POST"})
             return
+        log.warning("GET на невідомий шлях %s з %s", path, self.address_string())
         self._respond(404, {"status": "error", "message": "not found"})
 
     def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path != self.config.path:
+            log.warning(
+                "ВІДХИЛЕНО (404) запит з %s: очікую шлях %s. %s",
+                self.address_string(), self.config.path,
+                describe_request("POST", parsed.path, urllib.parse.parse_qs(parsed.query),
+                                 dict(self.headers.items()), b""),
+            )
             self._respond(404, {"status": "error", "message": "not found"})
             return
 
         length = int(self.headers.get("Content-Length") or 0)
         if length > self.config.max_body_bytes:
+            log.warning("ВІДХИЛЕНО (413) запит з %s: тіло %s байт", self.address_string(), length)
             self._respond(413, {"status": "error", "message": "payload too large"})
             return
         body = self.rfile.read(length) if length else b""
@@ -134,19 +167,31 @@ class WebhookHandler(BaseHTTPRequestHandler):
         headers = {key: value for key, value in self.headers.items()}
         query = urllib.parse.parse_qs(parsed.query)
         if not verify(self.config, headers, query, body):
-            log.warning("відхилено запит з %s: підпис/токен не збігається", self.address_string())
+            log.warning(
+                "ВІДХИЛЕНО (401) запит з %s — ключ не збігається з WEBHOOK_TOKEN. %s",
+                self.address_string(),
+                describe_request("POST", parsed.path, query, headers, body),
+            )
+            log.debug("тіло відхиленого запиту: %s", body[:500].decode("utf-8", errors="replace"))
             self._respond(401, {"status": "error", "message": "unauthorized"})
             return
 
         try:
             payload = parse_payload(body, self.headers.get("Content-Type", ""))
         except PayloadError as exc:
-            log.warning("відхилено запит з %s: %s", self.address_string(), exc)
+            log.warning(
+                "ВІДХИЛЕНО (400) запит з %s: %s. %s", self.address_string(), exc,
+                describe_request("POST", parsed.path, query, headers, body),
+            )
+            log.debug("тіло: %s", body[:500].decode("utf-8", errors="replace"))
             self._respond(400, {"status": "error", "message": str(exc)})
             return
 
         inbox_id = self.on_payload(json.dumps(payload, ensure_ascii=False))
-        log.info("прийнято заявку в чергу #%s (%s байт)", inbox_id, len(body))
+        log.info(
+            "ПРИЙНЯТО в чергу #%s. %s", inbox_id,
+            describe_request("POST", parsed.path, query, headers, body),
+        )
         self._respond(200, {"status": "accepted", "id": inbox_id})
 
 
