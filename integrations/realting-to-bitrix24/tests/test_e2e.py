@@ -37,6 +37,7 @@ KNOWN_DUPLICATE_PHONE = "0501112233"
 
 class _Handler(BaseHTTPRequestHandler):
     calls: list[tuple[str, object]] = []
+    orders: list[dict] | None = None      # None → типовий набір ORDERS
 
     def log_message(self, *args):  # тиша у виводі тестів
         pass
@@ -57,7 +58,8 @@ class _Handler(BaseHTTPRequestHandler):
         if "page=" in self.path:
             page = int(self.path.split("page=")[1].split("&")[0])
         type(self).calls.append(("realting_page", page))
-        self._send({"data": ORDERS if page == 1 else []})
+        rows = ORDERS if type(self).orders is None else type(self).orders
+        self._send({"data": rows if page == 1 else []})
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -262,3 +264,32 @@ class GuardsTest(unittest.TestCase):
 
     def test_drain_on_empty_queue_is_fine(self):
         self.assertEqual(main(["--env-file", self._env(), "--log-level", "CRITICAL", "drain"]), 0)
+
+
+class WholeArchiveFlagTest(_FakePlatforms):
+    """SYNC_WHOLE_ARCHIVE із конфігу має діяти без прапорця в команді."""
+
+    OLD_ORDER = {
+        "id": 900001,
+        "status_title": "Request accepted to work",
+        "name": "Стара Заявка",
+        "phone": "+380671110022",
+        "created_at": "2025-03-16 01:16:06",
+    }
+
+    def setUp(self):
+        super().setUp()
+        _Handler.orders = [self.OLD_ORDER]
+        self.addCleanup(lambda: setattr(_Handler, "orders", None))
+
+    def test_config_flag_is_honoured_without_command_line_flag(self):
+        with self.env_file.open("a", encoding="utf-8") as f:
+            f.write("\nSYNC_WHOLE_ARCHIVE=true\n")
+        self.assertEqual(self.run_cli("sync"), 0)
+        added = self.methods("crm.lead.add")
+        self.assertEqual(len(added), 1, "заявка 2025 року має пройти при SYNC_WHOLE_ARCHIVE=true")
+        self.assertEqual(added[0]["fields"]["UF_CRM_REALTING_ID"], "900001")
+
+    def test_without_the_config_flag_an_old_order_stays_outside_the_window(self):
+        self.assertEqual(self.run_cli("sync"), 0)
+        self.assertEqual(self.methods("crm.lead.add"), [])

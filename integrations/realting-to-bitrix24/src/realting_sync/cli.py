@@ -92,7 +92,8 @@ def cmd_sync(config: Config, args: argparse.Namespace) -> int:
             until=args.until,
             dry_run=args.dry_run,
             force=args.force,
-            whole_archive=args.whole_archive,
+            # None = «як у конфізі»; прапорець лише вмикає, ніколи не вимикає
+            whole_archive=True if args.whole_archive else None,
         )
     print(report.summary())
     for error in report.errors:
@@ -232,8 +233,9 @@ def cmd_seed(config: Config, args: argparse.Namespace) -> int:
         syncer = Synchronizer(config, RealtingClient(config.realting), BitrixClient(config.bitrix), state)
         marked = syncer.seed()
     print(f"Позначено як уже оброблені: {marked}")
-    print("У CRM нічого не створено. Замасковані заявки не позначались — коли Realting")
-    print("відкриє їхні контакти, вони приїдуть у CRM як нові.")
+    print("У CRM нічого не створено.")
+    print("Заявки з відкритими контактами лишаються позаду назавжди; замасковані позначені")
+    print("окремо — щойно Realting відкриє їхні контакти, вони потраплять у CRM.")
     return 0
 
 
