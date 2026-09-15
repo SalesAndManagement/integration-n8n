@@ -127,7 +127,7 @@ class BitrixClient:
         cfg = self.config
         fields: dict[str, Any] = {
             "TITLE": lead_title(lead),
-            "NAME": lead.first_name or "Без імені",
+            "NAME": lead.first_name or "Без имени",
             "LAST_NAME": lead.last_name,
             "SOURCE_ID": cfg.source_id,
             "SOURCE_DESCRIPTION": f"realting.com / {lead.source_type}",
@@ -154,7 +154,7 @@ class BitrixClient:
         """Поля для дозаповнення ліда, коли Realting відкрив контакти."""
         fields: dict[str, Any] = {
             "TITLE": lead_title(lead),
-            "NAME": lead.first_name or "Без імені",
+            "NAME": lead.first_name or "Без имени",
             "LAST_NAME": lead.last_name,
             "COMMENTS": lead_comment(lead),
         }
@@ -166,8 +166,14 @@ class BitrixClient:
 
 
 def lead_title(lead: Lead) -> str:
-    prefix = "🔒 " if lead.masked else ""
-    title = f"{prefix}Realting #{lead.external_id}"
+    """Заголовок ліда.
+
+    Без емодзі: символи поза BMP (як 🔒, U+1F512) портал не приймає — поле TITLE
+    приходить порожнім, без жодної помилки у відповіді.
+    """
+    title = f"Realting #{lead.external_id}"
+    if lead.masked:
+        title = f"{title} (контакты скрыты)"
     if lead.object_title:
         title = f"{title} — {lead.object_title}"
     return title[:255]
@@ -175,19 +181,19 @@ def lead_title(lead: Lead) -> str:
 
 def lead_comment(lead: Lead) -> str:
     lines = [
-        ("⚠️ Контакти приховані Realting. Прийміть заявку в роботу в кабінеті realting.com — "
-         "після цього телефон і пошта підставляться в цей лід автоматично.") if lead.masked else "",
-        f"Повідомлення: {lead.comment}" if lead.comment else "",
-        f"Обʼєкт: {lead.object_title}" if lead.object_title else "",
-        f"Ціна: {lead.object_price}" if lead.object_price else "",
+        ("ВНИМАНИЕ: контакты скрыты Realting. Примите заявку в работу в кабинете realting.com — "
+         "после этого телефон и почта подставятся в этот лид автоматически.") if lead.masked else "",
+        f"Сообщение: {lead.comment}" if lead.comment else "",
+        f"Объект: {lead.object_title}" if lead.object_title else "",
+        f"Цена: {lead.object_price}" if lead.object_price else "",
         f"Тип: {lead.object_type}" if lead.object_type else "",
-        f"Посилання: {lead.object_url}" if lead.object_url else "",
-        f"ID обʼєкта: {lead.object_id}" if lead.object_id else "",
-        f"Регіон клієнта: {lead.region}" if lead.region else "",
-        f"Мова заявки: {lead.language}" if lead.language else "",
+        f"Ссылка: {lead.object_url}" if lead.object_url else "",
+        f"ID объекта: {lead.object_id}" if lead.object_id else "",
+        f"Регион клиента: {lead.region}" if lead.region else "",
+        f"Язык заявки: {lead.language}" if lead.language else "",
         f"Статус на Realting: {lead.status}" if lead.status else "",
-        f"Створено на Realting: {lead.created_at}" if lead.created_at else "",
-        f"Отримано: {lead.received_at}" if lead.received_at and lead.received_at != lead.created_at else "",
+        f"Создано на Realting: {lead.created_at}" if lead.created_at else "",
+        f"Получено: {lead.received_at}" if lead.received_at and lead.received_at != lead.created_at else "",
         f"Realting ID: {lead.external_id}",
     ]
     return "\n".join(line for line in lines if line)
@@ -195,10 +201,10 @@ def lead_comment(lead: Lead) -> str:
 
 def duplicate_comment(lead: Lead) -> str:
     lines = [
-        f"Нова заявка з realting.com #{lead.external_id}",
+        f"Новая заявка с realting.com #{lead.external_id}",
         lead.comment,
         lead.object_title,
         lead.object_url,
-        f"Створено: {lead.created_at}" if lead.created_at else "",
+        f"Создано: {lead.created_at}" if lead.created_at else "",
     ]
     return "\n".join(line for line in lines if line)

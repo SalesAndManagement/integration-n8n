@@ -38,7 +38,7 @@ class LeadFieldsTest(unittest.TestCase):
 
     def test_empty_name_gets_placeholder(self):
         fields = self.client.lead_fields(sample_lead(first_name="", last_name=""))
-        self.assertEqual(fields["NAME"], "Без імені")
+        self.assertEqual(fields["NAME"], "Без имени")
 
     def test_title_includes_object_and_is_bounded(self):
         self.assertEqual(lead_title(sample_lead()), "Realting #42 — Квартира в Батумі")
@@ -49,6 +49,17 @@ class LeadFieldsTest(unittest.TestCase):
         self.assertIn("Цікавить обʼєкт", text)
         self.assertIn("https://realting.com/object/1", text)
         self.assertIn("Realting ID: 42", text)
+
+    def test_texts_stay_within_the_basic_plane(self):
+        """Bitrix24 мовчки обнуляє TITLE, якщо в ньому є символ поза BMP (емодзі)."""
+        lead = sample_lead(masked=True, object_title="48 m² | 1 bedroom apartment")
+        for text in (lead_title(lead), lead_comment(lead), lead_title(sample_lead())):
+            self.assertTrue(all(ord(ch) < 0x10000 for ch in text), f"емодзі в тексті: {text!r}")
+
+    def test_masked_lead_title_says_so_in_words(self):
+        title = lead_title(sample_lead(masked=True))
+        self.assertIn("контакты скрыты", title)
+        self.assertNotIn("контакты скрыты", lead_title(sample_lead()))
 
 
 class CallTest(unittest.TestCase):

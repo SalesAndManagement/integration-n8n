@@ -151,8 +151,9 @@ class RealFieldsTest(unittest.TestCase):
 
     def test_comment_carries_the_context_a_manager_needs(self):
         text = lead_comment(self.lead)
-        for expected in ("Цікавить ця квартира", "160 m² | Townhouse", "$312 455",
-                         "Ukraine", "In work", "realting.com/poland/property/1702254", "162300"):
+        for expected in ("Сообщение: Цікавить ця квартира", "Объект: 160 m² | Townhouse",
+                         "Цена: $312 455", "Регион клиента: Ukraine", "Статус на Realting: In work",
+                         "realting.com/poland/property/1702254", "Realting ID: 162300"):
             self.assertIn(expected, text)
 
     def test_bitrix_fields_of_a_real_order(self):
