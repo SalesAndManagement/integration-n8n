@@ -1,0 +1,201 @@
+{
+  "name": "BAF 10 — Товари та залишки → Бітрікс24 (скелет)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 8,18 * * *"
+            }
+          ]
+        }
+      },
+      "id": "c1000000-0000-4000-8000-000000000001",
+      "name": "Розклад 08:30 / 18:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-560, -100]
+    },
+    {
+      "parameters": {},
+      "id": "c1000000-0000-4000-8000-000000000002",
+      "name": "Запуск вручну",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-560, 100]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "c1", "name": "odataBase", "value": "https://vladiyan.extranet.club:46795/BASE/odata/standard.odata", "type": "string" },
+            { "id": "c2", "name": "b24Webhook", "value": "https://YOUR-PORTAL.bitrix24.ua/rest/1/YOUR_WEBHOOK_CODE/", "type": "string" },
+            { "id": "c3", "name": "entityProducts", "value": "Catalog_Номенклатура", "type": "string" },
+            { "id": "c4", "name": "entityStock", "value": "AccumulationRegister_ЗапасиНаСкладах/Balance", "type": "string" },
+            { "id": "c5", "name": "pageSize", "value": "1000", "type": "string" },
+            { "id": "c6", "name": "dryRun", "value": "true", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c1000000-0000-4000-8000-000000000003",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-340, 0]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.odataBase }}/{{ $json.entityProducts }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "$format", "value": "json" },
+            { "name": "$top", "value": "={{ $json.pageSize }}" },
+            { "name": "$orderby", "value": "Ref_Key" },
+            { "name": "$filter", "value": "DeletionMark eq false" }
+          ]
+        },
+        "options": {
+          "pagination": {
+            "pagination": {
+              "paginationMode": "updateAParameterInEachRequest",
+              "parameters": {
+                "parameters": [
+                  { "type": "qs", "name": "$skip", "value": "={{ $pageCount * Number($('Config').first().json.pageSize) }}" }
+                ]
+              },
+              "paginationCompleteWhen": "other",
+              "completeExpression": "={{ $response.body.value.length < Number($('Config').first().json.pageSize) }}",
+              "requestInterval": 300
+            }
+          }
+        }
+      },
+      "id": "c1000000-0000-4000-8000-000000000004",
+      "name": "OData: номенклатура",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-120, 0]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Config').first().json.odataBase }}/{{ $('Config').first().json.entityStock }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "$format", "value": "json" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c1000000-0000-4000-8000-000000000005",
+      "name": "OData: залишки",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [100, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// TODO(Етап 1): назви полів підставити з виводу baf_00_discovery_odata.\n// Зараз тут канонічна модель, до якої зводимо дані 1С перед відправкою в B24.\nconst cfg = $('Config').first().json;\n\nconst products = $('OData: номенклатура').all().flatMap((i) => i.json.value || [i.json]);\nconst stockRows = $('OData: залишки').all().flatMap((i) => i.json.value || [i.json]);\n\n// Залишки: групуємо по номенклатурі та складу.\n// TODO: узгодити формулу — фізичний залишок мінус резерв, чи з урахуванням \"у виробництві\".\nconst stockByRef = {};\nfor (const r of stockRows) {\n  const ref = r.Номенклатура_Key || r.Nomenklatura_Key;\n  if (!ref) continue;\n  const store = r.Склад_Key || r.Sklad_Key || 'default';\n  const qty = Number(r.КількістьBalance ?? r.QuantityBalance ?? r.КоличествоBalance ?? 0);\n  stockByRef[ref] = stockByRef[ref] || { total: 0, byStore: {} };\n  stockByRef[ref].total += qty;\n  stockByRef[ref].byStore[store] = (stockByRef[ref].byStore[store] || 0) + qty;\n}\n\nconst out = products.map((p) => {\n  const ref = p.Ref_Key;\n  const stock = stockByRef[ref] || { total: 0, byStore: {} };\n  return {\n    json: {\n      xmlId: ref,\n      sku: p.Артикул || p.Code || p.Код || '',\n      name: (p.Description || p.Наименование || p.Найменування || '').trim(),\n      unit: p.ОдиницяВиміру_Key || p.ЕдиницаИзмерения_Key || null,\n      vat: p.СтавкаПДВ || p.СтавкаНДС || null,\n      barcode: p.Штрихкод || null,\n      groupRef: p.Parent_Key || null,\n      isFolder: Boolean(p.IsFolder),\n      quantity: stock.total,\n      quantityByStore: stock.byStore\n    }\n  };\n});\n\n// Групи номенклатури не є товарами.\nreturn out.filter((i) => !i.json.isFolder);"
+      },
+      "id": "c1000000-0000-4000-8000-000000000006",
+      "name": "Нормалізація",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [320, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Дельта: у Бітрікс24 їдуть лише позиції, що змінилися з попереднього прогону.\n// MVP тримає стан у staticData воркфлоу (пишеться тільки у продакшн-виконаннях,\n// не в ручному тесті). Етап 4 переносить це в таблицю Postgres.\nconst crypto = require('crypto');\nconst store = $getWorkflowStaticData('global');\nstore.hashes = store.hashes || {};\n\nconst changed = [];\nlet unchanged = 0;\n\nfor (const item of $input.all()) {\n  const d = item.json;\n  const significant = JSON.stringify([d.sku, d.name, d.unit, d.vat, d.barcode, d.quantity, d.quantityByStore]);\n  const hash = crypto.createHash('sha1').update(significant).digest('hex');\n  if (store.hashes[d.xmlId] === hash) {\n    unchanged++;\n    continue;\n  }\n  changed.push({ json: { ...d, _hash: hash } });\n}\n\nif (changed.length === 0) {\n  return [{ json: { _empty: true, unchanged } }];\n}\nreturn changed;"
+      },
+      "id": "c1000000-0000-4000-8000-000000000007",
+      "name": "Дельта",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [540, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Збираємо пакети batch по 50 команд (ліміт Бітрікс24).\n// TODO(Етап 2): метод і склад полів залежать від рішення по каталогу:\n//   catalog.product.* + catalog.product.offer.*  — якщо є торговий каталог і торгові пропозиції\n//   crm.product.*                                — якщо тільки товари CRM\n// TODO(Етап 3): при увімкненому складському обліку кількість не ставиться напряму —\n//   потрібні catalog.document.add / .element.add / .conduct замість поля QUANTITY.\nconst BATCH_LIMIT = 50;\nconst items = $input.all().filter((i) => !i.json._empty);\nif (items.length === 0) return [{ json: { _empty: true } }];\n\nfunction toQuery(obj, prefix) {\n  const parts = [];\n  for (const [k, v] of Object.entries(obj)) {\n    if (v === null || v === undefined) continue;\n    const key = prefix ? `${prefix}[${k}]` : k;\n    if (typeof v === 'object' && !Array.isArray(v)) {\n      parts.push(toQuery(v, key));\n    } else {\n      parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(v)}`);\n    }\n  }\n  return parts.filter(Boolean).join('&');\n}\n\nconst commands = items.map((i) => {\n  const d = i.json;\n  const fields = {\n    NAME: d.name,\n    XML_ID: d.xmlId,\n    PROPERTY_ARTICUL: d.sku,\n    QUANTITY: d.quantity\n  };\n  // Оновлення за XML_ID робиться через пошук + update; на Етапі 2 замінюємо\n  // на реальний ідентифікатор товару з попереднього прогону (мапа xmlId → b24Id).\n  return `crm.product.add?${toQuery({ fields }, '')}`;\n});\n\nconst packets = [];\nfor (let i = 0; i < commands.length; i += BATCH_LIMIT) {\n  const slice = commands.slice(i, i + BATCH_LIMIT);\n  const cmd = {};\n  slice.forEach((c, idx) => { cmd[`c${idx}`] = c; });\n  packets.push({ json: { halt: 0, cmd, _count: slice.length } });\n}\nreturn packets;"
+      },
+      "id": "c1000000-0000-4000-8000-000000000008",
+      "name": "Пакети batch",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.b24Webhook }}batch",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ halt: $json.halt, cmd: $json.cmd }) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 2,
+              "batchInterval": 1100
+            }
+          },
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "c1000000-0000-4000-8000-000000000009",
+      "name": "B24: batch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [980, 0],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Підсумок прогону + фіксація хешів. Хеші зберігаємо ТІЛЬКИ після успішної\n// відправки, інакше після падіння дельта \"проглотить\" незалитi зміни.\nconst store = $getWorkflowStaticData('global');\nstore.hashes = store.hashes || {};\n\nlet sent = 0;\nconst errors = [];\nfor (const item of $input.all()) {\n  const body = item.json || {};\n  const result = body.result || {};\n  const resultErrors = result.result_error || {};\n  const errKeys = Object.keys(resultErrors);\n  if (body.error || errKeys.length) {\n    errors.push({ error: body.error || null, commandErrors: resultErrors });\n  }\n  sent += Object.keys(result.result || {}).length;\n}\n\nif (errors.length === 0) {\n  for (const item of $('Дельта').all()) {\n    const d = item.json;\n    if (d._hash) store.hashes[d.xmlId] = d._hash;\n  }\n}\n\nreturn [{\n  json: {\n    finishedAt: new Date().toISOString(),\n    sent,\n    errorPackets: errors.length,\n    errors: errors.slice(0, 10),\n    hashesStored: Object.keys(store.hashes).length\n  }\n}];"
+      },
+      "id": "c1000000-0000-4000-8000-000000000010",
+      "name": "Підсумок",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 0]
+    },
+    {
+      "parameters": {
+        "content": "## Це скелет, не готовий обмін\n\nСтруктура потоку, ліміти, пагінація, дельта та batch — вже правильні.\nЧервоні місця, позначені `TODO`, закриваються після Етапу 0–1:\n\n1. Реальні назви сутностей і полів OData — з `baf_00_discovery_odata`.\n2. Формула залишку (резерви, у виробництві) — рішення замовника.\n3. `crm.product.*` чи `catalog.product.*` + торгові пропозиції — з `baf_01_discovery_bitrix24`.\n4. Залишки при увімкненому складському обліку — через складські документи.\n5. Мапа `xmlId → b24Id` і оновлення замість `add`, щоб не плодити дублі.\n\n`dryRun` у Config поки не підключений до логіки — вимикач додається на Етапі 2\nразом із режимом \"тільки звіт\" для першої звірки з наявними товарами.\n\n## Надійність\n\nError Workflow з алертом у Telegram підключається в налаштуваннях воркфлоу\n(Settings → Error Workflow) на Етапі 4.",
+        "height": 520,
+        "width": 480
+      },
+      "id": "c1000000-0000-4000-8000-000000000011",
+      "name": "Що тут не готово",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-560, 260]
+    }
+  ],
+  "connections": {
+    "Розклад 08:30 / 18:30": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Запуск вручну": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Config": { "main": [[{ "node": "OData: номенклатура", "type": "main", "index": 0 }]] },
+    "OData: номенклатура": { "main": [[{ "node": "OData: залишки", "type": "main", "index": 0 }]] },
+    "OData: залишки": { "main": [[{ "node": "Нормалізація", "type": "main", "index": 0 }]] },
+    "Нормалізація": { "main": [[{ "node": "Дельта", "type": "main", "index": 0 }]] },
+    "Дельта": { "main": [[{ "node": "Пакети batch", "type": "main", "index": 0 }]] },
+    "Пакети batch": { "main": [[{ "node": "B24: batch", "type": "main", "index": 0 }]] },
+    "B24: batch": { "main": [[{ "node": "Підсумок", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "timezone": "Europe/Kyiv", "saveManualExecutions": true },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}

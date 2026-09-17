@@ -1,0 +1,104 @@
+{
+  "name": "BAF 01 — Discovery Бітрікс24",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "b1000000-0000-4000-8000-000000000001",
+      "name": "Запуск вручну",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-360, 0]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cfg-b24",
+              "name": "b24Webhook",
+              "value": "https://YOUR-PORTAL.bitrix24.ua/rest/1/YOUR_WEBHOOK_CODE/",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b1000000-0000-4000-8000-000000000002",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-140, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Набір безпечних read-only методів: показує, що реально доступно на порталі.\n// Помилка по окремому методу — теж результат (значить нема scope або функціоналу).\nconst probes = [\n  { method: 'profile', params: {}, why: 'від кого працює вебхук' },\n  { method: 'scope', params: {}, why: 'які права видані вебхуку' },\n  { method: 'catalog.catalog.list', params: {}, why: 'торгові каталоги (інфоблоки)' },\n  { method: 'catalog.store.list', params: {}, why: 'склади; порожньо або помилка = складський облік вимкнений' },\n  { method: 'catalog.measure.list', params: {}, why: 'одиниці виміру для мапінгу' },\n  { method: 'catalog.priceType.list', params: {}, why: 'типи цін' },\n  { method: 'crm.product.fields', params: {}, why: 'поля товару CRM, у т.ч. кастомні' },\n  { method: 'crm.productsection.list', params: {}, why: 'розділи товарів CRM' },\n  { method: 'crm.product.list', params: { select: ['ID', 'NAME', 'XML_ID', 'PROPERTY_*'], start: 0 }, why: 'скільки товарів уже є і чи заповнений XML_ID' }\n];\nreturn probes.map((p) => ({ json: p }));"
+      },
+      "id": "b1000000-0000-4000-8000-000000000003",
+      "name": "Методи для перевірки",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [80, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.b24Webhook }}{{ $json.method }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.params || {}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 2,
+              "batchInterval": 1100
+            }
+          }
+        }
+      },
+      "id": "b1000000-0000-4000-8000-000000000004",
+      "name": "Виклик REST",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [300, 0],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Зводимо відповіді в один звіт: що доступно, що ні, і ключові висновки.\nconst probes = $('Методи для перевірки').all();\nconst answers = $input.all();\nconst report = [];\n\nfor (let i = 0; i < answers.length; i++) {\n  const probe = probes[i] ? probes[i].json : { method: `#${i}` , why: '' };\n  const body = answers[i].json || {};\n  const ok = body.error === undefined && body.error_description === undefined;\n  report.push({\n    method: probe.method,\n    why: probe.why,\n    ok,\n    error: ok ? null : `${body.error || ''} ${body.error_description || ''}`.trim(),\n    total: body.total !== undefined ? body.total : null,\n    result: ok ? body.result : null\n  });\n}\n\nconst byMethod = Object.fromEntries(report.map((r) => [r.method, r]));\nconst stores = byMethod['catalog.store.list'];\nconst storeList = stores && stores.ok ? (stores.result.stores || stores.result || []) : [];\nconst products = byMethod['crm.product.list'];\n\nconst conclusions = {\n  scopeGranted: byMethod['scope'] && byMethod['scope'].ok ? byMethod['scope'].result : 'не вдалося отримати',\n  catalogAvailable: byMethod['catalog.catalog.list'] ? byMethod['catalog.catalog.list'].ok : false,\n  inventoryManagement: Array.isArray(storeList) && storeList.length > 0\n    ? `схоже, увімкнений: складів ${storeList.length}`\n    : 'схоже, вимкнений або немає прав — залишки пишемо у QUANTITY товару',\n  existingProducts: products && products.total !== null ? products.total : 'невідомо',\n  nextStep: 'віддати цей вивід у чат — на його основі будується таблиця мапінгу'\n};\n\nreturn [{ json: { conclusions, report } }];"
+      },
+      "id": "b1000000-0000-4000-8000-000000000005",
+      "name": "Звіт",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 0]
+    },
+    {
+      "parameters": {
+        "content": "## Розвідник Бітрікс24\n\n1. У вузлі **Config** вставити вхідний вебхук (з `/` на кінці).\n2. Запустити і віддати вивід вузла **Звіт**.\n\nБатчинг 2 запити / 1.1 сек — тримаємось ліміту порталу.\n`neverError` увімкнений спеціально: помилка по методу — це теж діагностика.\n\nВебхук у чат не надсилати — він дає повний доступ до порталу.",
+        "height": 300,
+        "width": 420
+      },
+      "id": "b1000000-0000-4000-8000-000000000006",
+      "name": "Інструкція",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-360, 160]
+    }
+  ],
+  "connections": {
+    "Запуск вручну": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Config": { "main": [[{ "node": "Методи для перевірки", "type": "main", "index": 0 }]] },
+    "Методи для перевірки": { "main": [[{ "node": "Виклик REST", "type": "main", "index": 0 }]] },
+    "Виклик REST": { "main": [[{ "node": "Звіт", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "timezone": "Europe/Kyiv" },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}

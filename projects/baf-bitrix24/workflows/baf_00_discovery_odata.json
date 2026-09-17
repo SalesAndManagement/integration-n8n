@@ -1,0 +1,108 @@
+{
+  "name": "BAF 00 — Discovery OData",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a1000000-0000-4000-8000-000000000001",
+      "name": "Запуск вручну",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-360, 0]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cfg-1",
+              "name": "odataBase",
+              "value": "https://vladiyan.extranet.club:46795/BASE/odata/standard.odata",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000002",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-140, 0]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.odataBase }}/?$format=json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {}
+      },
+      "id": "a1000000-0000-4000-8000-000000000003",
+      "name": "OData: сервісний документ",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [80, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Класифікуємо опубліковані сутності OData і підсвічуємо ті, що потрібні для\n// вигрузки товарів і залишків. Якщо потрібного тут немає — об'єкт не доданий\n// у \"Склад стандартного інтерфейсу OData\" (див. 01-odata-setup.md, крок 1.1).\nconst raw = $input.first().json;\nconst list = raw.value || raw.EntitySets || [];\nconst names = list.map((v) => (typeof v === 'string' ? v : v.name || v.url)).filter(Boolean);\n\nconst kinds = {};\nfor (const n of names) {\n  const kind = n.includes('_') ? n.split('_')[0] : 'other';\n  kinds[kind] = (kinds[kind] || 0) + 1;\n}\n\nconst KEYWORDS = [\n  'номенклатур', 'номенклатура', 'характеристик', 'запас', 'товар', 'склад',\n  'цін', 'цен', 'одиниц', 'единиц', 'штрихкод', 'резерв', 'замовлен', 'заказ',\n  'упаковк', 'вид', 'групп', 'груп'\n];\nconst interesting = names.filter((n) => {\n  const low = n.toLowerCase();\n  return KEYWORDS.some((k) => low.includes(k));\n});\n\nreturn [{\n  json: {\n    total: names.length,\n    kinds,\n    interestingCount: interesting.length,\n    interesting,\n    all: names\n  }\n}];"
+      },
+      "id": "a1000000-0000-4000-8000-000000000004",
+      "name": "Класифікація сутностей",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [300, 0]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Config').first().json.odataBase }}/$metadata",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "a1000000-0000-4000-8000-000000000005",
+      "name": "OData: $metadata",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 0]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Витягуємо склад полів по цікавих нам сутностях з XML-метаданих.\n// Вивід цього вузла — те, що потрібно віддати для побудови таблиці мапінгу.\nconst xml = $input.first().json.data || $input.first().json.body || '';\nconst interesting = ($('Класифікація сутностей').first().json.interesting || []).map((s) => s.toLowerCase());\n\nconst out = [];\nconst entityRe = /<EntityType Name=\"([^\"]+)\"([\\s\\S]*?)<\\/EntityType>/g;\nlet m;\nwhile ((m = entityRe.exec(xml)) !== null) {\n  const name = m[1];\n  const low = name.toLowerCase();\n  const wanted = interesting.length === 0 || interesting.some((i) => low.includes(i) || i.includes(low));\n  if (!wanted) continue;\n  const props = [...m[2].matchAll(/<Property Name=\"([^\"]+)\" Type=\"([^\"]+)\"/g)]\n    .map((p) => `${p[1]}: ${p[2].replace('Edm.', '')}`);\n  out.push({ entity: name, propertyCount: props.length, properties: props });\n}\n\n// Віртуальні таблиці регістрів (Balance / SliceLast) публікуються як FunctionImport\n// або як окремі EntityType — фіксуємо, що реально доступно.\nconst functions = [...xml.matchAll(/<FunctionImport Name=\"([^\"]+)\"/g)].map((f) => f[1]);\n\nreturn [{\n  json: {\n    metadataBytes: xml.length,\n    entitiesFound: out.length,\n    functionImports: functions,\n    entities: out\n  }\n}];"
+      },
+      "id": "a1000000-0000-4000-8000-000000000006",
+      "name": "Поля сутностей",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [740, 0]
+    },
+    {
+      "parameters": {
+        "content": "## Розвідник OData (BAF)\n\n1. Створити креденшал **Basic Auth** з користувачем `n8n_integration` (див. 01-odata-setup.md).\n2. Прикріпити його до обох вузлів HTTP Request.\n3. У вузлі **Config** замінити `BASE` на реальне ім'я публікації.\n4. Запустити і віддати вивід вузлів **Класифікація сутностей** і **Поля сутностей**.\n\nЯкщо `404` — OData не включений у публікації.\nЯкщо `value` порожній — не заповнений склад інтерфейсу OData.",
+        "height": 320,
+        "width": 420
+      },
+      "id": "a1000000-0000-4000-8000-000000000007",
+      "name": "Інструкція",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-360, 160]
+    }
+  ],
+  "connections": {
+    "Запуск вручну": { "main": [[{ "node": "Config", "type": "main", "index": 0 }]] },
+    "Config": { "main": [[{ "node": "OData: сервісний документ", "type": "main", "index": 0 }]] },
+    "OData: сервісний документ": { "main": [[{ "node": "Класифікація сутностей", "type": "main", "index": 0 }]] },
+    "Класифікація сутностей": { "main": [[{ "node": "OData: $metadata", "type": "main", "index": 0 }]] },
+    "OData: $metadata": { "main": [[{ "node": "Поля сутностей", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "timezone": "Europe/Kyiv" },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}
