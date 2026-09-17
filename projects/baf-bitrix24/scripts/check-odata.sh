@@ -16,7 +16,7 @@ CREDS="${2:-}"
 BODY="$(mktemp)"
 trap 'rm -f "$BODY"' EXIT
 
-CANDIDATES=("" "/baf" "/BAF" "/unf" "/UNF" "/base" "/db" "/trade" "/vladiyan" "/1c" "/ua")
+CANDIDATES=("" "/baf" "/BAF" "/unf" "/UNF" "/base" "/db" "/trade" "/vladiyan" "/1c" "/ua" "/swp")
 
 echo "Хост: $HOST"
 echo "Авторизація: ${CREDS:+увімкнена}${CREDS:-немає}"
@@ -24,7 +24,9 @@ echo
 
 for base in "${CANDIDATES[@]}"; do
   url="${HOST}${base}/odata/standard.odata/?\$format=json"
-  code=$(curl -s -m 20 -o "$BODY" -w '%{http_code}' ${CREDS:+-u "$CREDS"} "$url" || echo 000)
+  # -k: публікація може бути під самопідписаним сертифікатом (типово для 1С на IIS).
+  # Для продакшн-обміну натомість підкладаємо сертифікат як довірений, а не ігноруємо.
+  code=$(curl -k -s -m 20 -o "$BODY" -w '%{http_code}' ${CREDS:+-u "$CREDS"} "$url" || echo 000)
   printf '%-12s HTTP %s' "${base:-/}" "$code"
 
   case "$code" in
@@ -41,7 +43,7 @@ for base in "${CANDIDATES[@]}"; do
     401) echo "  <- endpoint існує, але не пройшла авторизація (потрібен користувач з 1С-аутентифікацією)" ;;
     403) echo "  <- увімкнений, але немає прав на об'єкти" ;;
     404) echo "  <- немає тут: або OData вимкнений, або інше ім'я публікації" ;;
-    000) echo "  <- немає відповіді: спробуйте http:// замість https:// або перевірте фаєрвол" ;;
+    000) echo "  <- немає відповіді: перевірте схему (http/https) — порт публікації 1С часто тільки https" ;;
     *)   echo "" ;;
   esac
 done

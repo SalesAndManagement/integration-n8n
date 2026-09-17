@@ -21,7 +21,7 @@ curl -sS -m 15 -D - -o /dev/null "http://${HOST}:${PORT}/" 2>&1 | head -8
 
 echo
 echo "=== HTTPS (з TLS)"
-curl -sS -m 15 -D - -o /dev/null "https://${HOST}:${PORT}/" 2>&1 | head -8
+curl -k -sS -m 15 -D - -o /dev/null "https://${HOST}:${PORT}/" 2>&1 | head -8
 
 echo
 echo "=== TLS handshake"
@@ -37,8 +37,9 @@ cat <<'HINT'
 --- Як читати ---
 Server: Apache / Microsoft-IIS у HTTP-відповіді
     -> це веб-сервер, публікація 1С тут є, далі запускайте check-odata.sh з http://
-TLS alert internal error / no peer certificate available
-    -> на порту немає TLS: працюйте по http:// і піднімайте питання HTTPS з хостером
+HTTP скидає з'єднання (Connection reset), а openssl показує сертифікат
+    -> на порту ТІЛЬКИ https. Усі перевірки робіть з https і -k, якщо
+       сертифікат самопідписаний (verify error num=18)
 TCP відкритий, але HTTP-відповіді немає жодної
     -> це не веб-сервер, а транспорт 1С (кластер). Веб-публікації немає,
        OData недоступний, поки хостер не опублікує базу на веб-сервері.
