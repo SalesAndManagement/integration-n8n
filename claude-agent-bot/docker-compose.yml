@@ -1,0 +1,39 @@
+services:
+  claude-agent-bot:
+    build: .
+    container_name: claude-agent-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Перекриває значення з .env: усередині контейнера шляхи фіксовані.
+      AGENT_WORKSPACE: /data/workspace
+      STATE_FILE: /data/sessions.json
+      CLAUDE_CONFIG_DIR: /data/claude
+    volumes:
+      - agent-data:/data
+      # Дати агенту читати колекцію workflow'ів цього репозиторію (тільки читання):
+      # - ../workflows:/data/workspace/workflows:ro
+    networks: [agent-net]
+
+  # Піднімається лише з профілем: docker compose --profile n8n up -d
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: n8n
+    profiles: [n8n]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5678:5678"
+    environment:
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      GENERIC_TIMEZONE: Europe/Kyiv
+    volumes:
+      - n8n-data:/home/node/.n8n
+    networks: [agent-net]
+
+volumes:
+  agent-data:
+  n8n-data:
+
+networks:
+  agent-net:
