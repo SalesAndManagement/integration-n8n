@@ -94,14 +94,37 @@ async def _keep_typing(bot, chat_id: int) -> None:
         log.debug("Індикатор набору зупинився: %s", exc)
 
 
+class AllowedUser(filters.MessageFilter):
+    """Доступ за числовим id або за @username.
+
+    Власний фільтр, а не filters.User: той не дозволяє задати id і username
+    одночасно, а username порівнює з урахуванням регістру — легко промахнутись.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        super().__init__(name="AllowedUser")
+        self._ids = settings.allowed_user_ids
+        self._usernames = settings.allowed_usernames
+
+    def filter(self, message) -> bool:
+        user = getattr(message, "from_user", None)
+        if user is None:
+            return False
+        if user.id in self._ids:
+            return True
+        username = (user.username or "").lower()
+        return bool(username) and username in self._usernames
+
+
 class TelegramBot:
     def __init__(self, settings: Settings, agent: ClaudeAgent) -> None:
         self._settings = settings
         self._agent = agent
+        self._seen_by_username: set[int] = set()
 
     def build(self) -> Application:
         app = Application.builder().token(self._settings.telegram_token).build()
-        allowed = filters.User(user_id=list(self._settings.allowed_user_ids))
+        allowed = AllowedUser(self._settings)
 
         app.add_handler(CommandHandler(["start", "help"], self.help_command, filters=allowed))
         app.add_handler(CommandHandler("reset", self.reset_command, filters=allowed))
@@ -135,6 +158,7 @@ class TelegramBot:
             browser = f"Playwright, {settings.browser_viewport}, {profile}"
         lines = [
             f"Режим: {settings.mode}",
+            f"Доступ: id {len(settings.allowed_user_ids)} · @ {len(settings.allowed_usernames)}",
             f"Модель: {settings.model} (effort={settings.effort})",
             f"Ліміти: {settings.max_budget_usd}$ / {settings.max_turns} кроків на запит",
             f"Робочий каталог: {settings.workspace}",
@@ -147,13 +171,31 @@ class TelegramBot:
 
     async def reject(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.effective_user
-        log.warning("Відмова користувачу %s (%s)", user.id if user else "?", user.username if user else "?")
+        log.warning(
+            "Відмова: id=%s @%s — щоб пустити, додай id у TELEGRAM_ALLOWED_USER_IDS",
+            user.id if user else "?",
+            user.username if user else "?",
+        )
         if update.effective_message:
             await update.effective_message.reply_text("Немає доступу до цього бота.")
+
+    def _note_username_access(self, user) -> None:
+        """Username можна змінити й перехопити, id — ні. Показуємо id, щоб закріпити доступ."""
+        if user is None or user.id in self._settings.allowed_user_ids:
+            return
+        if user.id in self._seen_by_username:
+            return
+        self._seen_by_username.add(user.id)
+        log.info(
+            "Доступ за @%s · id=%s — надійніше додати цей id у TELEGRAM_ALLOWED_USER_IDS",
+            user.username,
+            user.id,
+        )
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message
         chat_id = update.effective_chat.id
+        self._note_username_access(update.effective_user)
         prompt = (message.text or "").strip()
         if not prompt:
             return

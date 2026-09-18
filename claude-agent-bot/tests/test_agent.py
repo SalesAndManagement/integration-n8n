@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from app.agent import AgentReply, ClaudeAgent
-from app.bot import format_reply, split_message
+from app.bot import AllowedUser, format_reply, split_message
 from app.browser import OUTPUT_SUBDIR, build_playwright_server
 from app.config import ConfigError, Settings
 from app.tools import _clean_path, build_n8n_server
@@ -355,3 +355,54 @@ def test_load_env_file_missing_is_not_an_error(tmp_path):
     from app.env_file import load_env_file
 
     assert load_env_file(tmp_path / "нема.env") == 0
+
+
+# --- доступ: id і @username -----------------------------------------------
+
+
+class _FakeUser:
+    def __init__(self, user_id: int, username: str | None = None):
+        self.id = user_id
+        self.username = username
+
+
+class _FakeMessage:
+    def __init__(self, user):
+        self.from_user = user
+
+
+def test_usernames_are_normalised(env):
+    env.setenv("TELEGRAM_ALLOWED_USERNAMES", "@PetrDoroshSM, SM_Vladyslav_Integrator ")
+    settings = Settings.from_env()
+    # ведуча @ прибрана, регістр знижений — інакше збіг не спрацює
+    assert settings.allowed_usernames == frozenset({"petrdoroshsm", "sm_vladyslav_integrator"})
+
+
+def test_only_usernames_is_enough_to_start(env):
+    env.delenv("TELEGRAM_ALLOWED_USER_IDS")
+    env.setenv("TELEGRAM_ALLOWED_USERNAMES", "@PetrDoroshSM")
+    settings = Settings.from_env()
+    assert not settings.allowed_user_ids
+    assert settings.allowed_usernames == frozenset({"petrdoroshsm"})
+
+
+def test_no_ids_and_no_usernames_refuses_to_start(env):
+    env.delenv("TELEGRAM_ALLOWED_USER_IDS")
+    env.setenv("TELEGRAM_ALLOWED_USERNAMES", "")
+    with pytest.raises(ConfigError):
+        Settings.from_env()
+
+
+def test_allowed_user_filter(env):
+    env.setenv("TELEGRAM_ALLOWED_USER_IDS", "111")
+    env.setenv("TELEGRAM_ALLOWED_USERNAMES", "@PetrDoroshSM")
+    allowed = AllowedUser(Settings.from_env())
+
+    assert allowed.filter(_FakeMessage(_FakeUser(111)))  # за id
+    # Telegram віддає username так, як його зареєстровано — регістр не має вирішувати
+    assert allowed.filter(_FakeMessage(_FakeUser(999, "PetrDoroshSM")))
+    assert allowed.filter(_FakeMessage(_FakeUser(999, "petrdoroshsm")))
+
+    assert not allowed.filter(_FakeMessage(_FakeUser(999, "stranger")))
+    assert not allowed.filter(_FakeMessage(_FakeUser(999, None)))  # username може не бути
+    assert not allowed.filter(_FakeMessage(None))
