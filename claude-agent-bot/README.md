@@ -102,11 +102,32 @@ nano .env                     # ключі
 |---|---|
 | `python3 -m venv` падає з `ensurepip is not available` (немає пакета `python3-venv`) | Ставить `uv` у `~/.local/bin` і створює venv ним. Якщо й системний Python не годиться — `uv` завантажує власний Python 3.12 |
 | Немає Node | Качає офіційний тарбол у `vendor/node`, без `nvm` і без змін у `~/.bashrc` |
-| Chromium не запуститься без системних бібліотек (вони з apt, тобто з root) | Перевіряє бінарник через `ldd`, називає конкретні `.so`, ставить `BROWSER_ENABLED=0` і йде далі |
+| Chromium не запуститься без системних бібліотек (вони з apt, тобто з root) | Викликає `scripts/install-browser-libs.sh`: качає потрібні `.deb` і **розпаковує їх у `vendor/syslibs`**, не встановлюючи в систему. Якщо не вийшло — називає конкретні `.so` і ставить `BROWSER_ENABLED=0` |
 
-Останній випадок не ламає агента: `WebSearch` і `WebFetch` працюють без браузера. Коли
-з'явиться root, досить раз виконати `sudo npx playwright install-deps chromium` і повернути
-`BROWSER_ENABLED=1`.
+### Бібліотеки chromium без root
+
+`apt-get download` і `dpkg -x` працюють від звичайного користувача — пакет можна завантажити
+й розпакувати, не встановлюючи. `scripts/install-browser-libs.sh` робить саме це:
+
+1. `ldd` показує, яких `.so` бракує;
+2. по таблиці «бібліотека → пакет» збирає список разом із залежностями, пропускаючи те,
+   що в системі вже стоїть, і ніколи не чіпаючи `libc6` та компанію — підміна glibc ламає все;
+3. качає й розпаковує в `vendor/syslibs`, потім перевіряє `ldd` знову (кілька кіл, бо пакет
+   може привести за собою нові залежності);
+4. пробує запустити `chromium --version` і лише після цього ставить `BROWSER_ENABLED=1`
+   та `BROWSER_LD_LIBRARY_PATH`.
+
+Індекс apt скрипт тримає свій, у `vendor/apt`: системний без root не оновити, а якщо він
+застарілий — завантаження дає 404 на версію, якої в дзеркалі вже немає.
+
+Запустити окремо, коли бібліотеки додались пізніше:
+
+```bash
+./scripts/install-browser-libs.sh
+```
+
+Якщо не спрацювало — агент лишається робочим без браузера (`WebSearch`, `WebFetch`), а з root
+це одна команда: `sudo npx playwright install-deps chromium`, далі `BROWSER_ENABLED=1`.
 
 Тримати процес живим без systemd:
 
@@ -170,6 +191,7 @@ crontab -e
 | `BROWSER_MCP_COMMAND` | `npx` | У Docker перекрито на `playwright-mcp` (пакет уже в образі) |
 | `BROWSER_MCP_CLI` | порожньо | Шлях до `cli.js` при встановленні без root; проставляє `setup-native.sh` |
 | `BROWSER_NODE` | `node` | Який `node` запускати. `setup-native.sh` ставить сюди `vendor/node/bin/node`, якщо качав його сам |
+| `BROWSER_LD_LIBRARY_PATH` | порожньо | Де лежать бібліотеки chromium, розпаковані без root; проставляє `install-browser-libs.sh` |
 | `N8N_WEBHOOK_BASE_URL` | порожньо | База n8n. Порожня — `trigger_workflow` поверне помилку |
 | `N8N_WEBHOOK_TOKEN` | порожньо | Значення заголовка `Authorization` для Header Auth у n8n |
 | `LOG_LEVEL` | `INFO` | `DEBUG` покаже stderr CLI-процесу агента |
@@ -257,7 +279,8 @@ python -m pytest
 | `Не задано ANTHROPIC_API_KEY` | Змінні не експортовані в оточення процесу (SDK не читає `.env`) |
 | `Invalid API key` / `Not logged in` | Ключ невірний або скінчились кредити в Console |
 | `Chromium distribution 'chrome' is not found` | Загубився прапорець `--browser chromium`; MCP пішов шукати системний Google Chrome |
-| `error while loading shared libraries: lib…so` | Немає системних бібліотек chromium. Ставляться тільки з root: `sudo npx playwright install-deps chromium` |
+| `error while loading shared libraries: lib…so` | Немає системних бібліотек chromium → `./scripts/install-browser-libs.sh` (без root) або з root `sudo npx playwright install-deps chromium` |
+| `apt-get download` дає 404 | Застарілий індекс. Скрипт тримає свій у `vendor/apt`; якщо не допомогло — `rm -rf vendor/apt` і запустити ще раз |
 | `permission denied … docker.sock` | Юзер не в групі `docker`. Без root — став через `scripts/setup-native.sh` |
 | Браузер падає без пояснень | Мало `/dev/shm` — у compose має бути `shm_size: "1gb"` |
 | Агент пише, що інструмент вимкнено | Режим `restricted`, інструмента немає в `ALLOWED_TOOLS` |

@@ -151,8 +151,7 @@ if [ -n "$NODE_BIN" ] && [ -n "$NPM_BIN" ]; then
         if [ -n "$MISSING" ]; then
             warn "chromium не запуститься, бракує системних бібліотек:"
             printf '   %s\n' $MISSING
-            warn "їх ставить тільки root: sudo npx playwright install-deps chromium"
-            warn "Поки що BROWSER_ENABLED=0 — WebSearch і WebFetch працюють без браузера."
+            NEED_LIBS=1
         else
             BROWSER_OK=1
             echo "усі бібліотеки на місці"
@@ -199,6 +198,23 @@ print("шляхи в .env проставлено")
 PY
 
 mkdir -p data/workspace data/claude data/browser-profile
+
+# --- бібліотеки chromium без root ----------------------------------------
+# Робимо після .env, бо цей крок сам проставляє BROWSER_ENABLED=1 і шлях до бібліотек.
+if [ "${NEED_LIBS:-0}" = "1" ]; then
+    if command -v apt-get >/dev/null && command -v dpkg >/dev/null; then
+        say "Дістаю бібліотеки chromium без root (розпакую .deb у vendor/syslibs)"
+        if ./scripts/install-browser-libs.sh; then
+            BROWSER_OK=1
+        else
+            warn "не вийшло — браузер лишається вимкненим"
+            warn "з root це одна команда: sudo npx playwright install-deps chromium"
+        fi
+    else
+        warn "немає apt-get/dpkg — бібліотеки без root не дістати"
+        warn "з root: sudo npx playwright install-deps chromium"
+    fi
+fi
 
 # --- підсумок -------------------------------------------------------------
 say "Готово"

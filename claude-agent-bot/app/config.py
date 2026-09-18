@@ -82,6 +82,7 @@ class Settings:
     browser_mcp_package: str
     browser_mcp_cli: str
     browser_node: str
+    browser_ld_library_path: str
 
     @property
     def is_sandbox(self) -> bool:
@@ -144,4 +145,5 @@ class Settings:
             or DEFAULT_BROWSER_PACKAGE,
             browser_mcp_cli=os.getenv("BROWSER_MCP_CLI", "").strip(),
             browser_node=os.getenv("BROWSER_NODE", "node").strip() or "node",
+            browser_ld_library_path=os.getenv("BROWSER_LD_LIBRARY_PATH", "").strip(),
         )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -51,4 +52,21 @@ def build_playwright_server(settings: Settings) -> dict[str, Any]:
         command, args = settings.browser_mcp_command, flags
 
     log.info("Playwright MCP: %s %s", command, " ".join(args))
-    return {"type": "stdio", "command": command, "args": args, "env": {}}
+    return {"type": "stdio", "command": command, "args": args, "env": _server_env(settings)}
+
+
+def _server_env(settings: Settings) -> dict[str, str]:
+    """Оточення для процесу браузера.
+
+    Передаємо явно те, без чого він не стартує: шлях до бібліотек, розпакованих
+    без root (scripts/install-browser-libs.sh), і шлях до самих браузерів. PATH і
+    HOME — на випадок, якщо цей env замінює оточення, а не доповнює його.
+    """
+    env: dict[str, str] = {}
+    if settings.browser_ld_library_path:
+        env["LD_LIBRARY_PATH"] = settings.browser_ld_library_path
+    for name in ("PLAYWRIGHT_BROWSERS_PATH", "PATH", "HOME"):
+        value = os.environ.get(name)
+        if value:
+            env[name] = value
+    return env

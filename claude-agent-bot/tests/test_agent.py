@@ -178,6 +178,25 @@ def test_browser_from_local_install(env, tmp_path):
     assert "--browser" in config["args"] and "--headless" in config["args"]
 
 
+def test_browser_env_carries_library_path(env, tmp_path, monkeypatch):
+    """Бібліотеки, розпаковані без root, видно тільки через LD_LIBRARY_PATH."""
+    libs = str(tmp_path / "vendor" / "syslibs" / "usr" / "lib" / "x86_64-linux-gnu")
+    env.setenv("BROWSER_LD_LIBRARY_PATH", libs)
+    monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "/home/vlad/.cache/ms-playwright")
+
+    server_env = build_playwright_server(Settings.from_env())["env"]
+    assert server_env["LD_LIBRARY_PATH"] == libs
+    # Якщо цей env замінює оточення, а не доповнює — браузер має лишитись знаходимим.
+    assert server_env["PLAYWRIGHT_BROWSERS_PATH"] == "/home/vlad/.cache/ms-playwright"
+    assert "PATH" in server_env
+
+
+def test_browser_env_stays_empty_without_extra_paths(env, monkeypatch):
+    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
+    server_env = build_playwright_server(Settings.from_env())["env"]
+    assert "LD_LIBRARY_PATH" not in server_env
+
+
 def test_browser_can_be_disabled(env):
     env.setenv("BROWSER_ENABLED", "0")
     options = ClaudeAgent(Settings.from_env())._options(chat_id=1)
