@@ -465,6 +465,10 @@ def test_describe_names_the_sdk_errors(env):
     described = agent._describe(ProcessError("failed", exit_code=1, stderr="Invalid API key"))
     assert "кодом 1" in described and "Invalid API key" in described
 
+    # Процес може впасти до того, як SDK встигне віддати stderr — тоді хоча б скажемо, що робити.
+    blind = agent._describe(ProcessError("failed", exit_code=1, stderr="Check stderr output for details"))
+    assert "diagnose.sh" in blind
+
 
 # --- ключ поза workspace ----------------------------------------------------
 

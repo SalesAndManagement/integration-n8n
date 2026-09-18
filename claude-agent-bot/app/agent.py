@@ -185,7 +185,7 @@ class ClaudeAgent:
             head = "Не знайдено виконуваний файл Claude Code. Перевстанови: ./scripts/setup-native.sh"
         elif isinstance(exc, ProcessError):
             code = getattr(exc, "exit_code", None)
-            head = f"Процес Claude Code завершився з кодом {code}."
+            head = f"Процес Claude Code завершився з кодом {code}. {exc}"
         elif isinstance(exc, CLIConnectionError):
             head = "Обірвався звʼязок із процесом Claude Code."
         elif isinstance(exc, CLIJSONDecodeError):
@@ -196,8 +196,11 @@ class ClaudeAgent:
         details = str(getattr(exc, "stderr", "") or "").strip()
         if not details and self._stderr:
             details = "\n".join(self._stderr)
-        if details:
-            head += "\n\n" + details[-STDERR_IN_REPLY_CHARS:]
+        # SDK скасовує читача stderr при закритті, тож коли процес падає одразу
+        # (найчастіше — непрацездатний ключ), деталей не лишається взагалі.
+        if details in ("", "Check stderr output for details"):
+            details = "Деталей не лишилось. Запусти на сервері ./scripts/diagnose.sh — він перевірить ключ, workspace і сам Claude Code."
+        head += "\n\n" + details[-STDERR_IN_REPLY_CHARS:]
         return head
 
     async def ask(
