@@ -179,6 +179,7 @@ crontab -e
 | Змінна | За замовчуванням | Призначення |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | — | Обов'язково. Ключ з Console, з нього списуються кредити |
+| `ANTHROPIC_WORKSPACE_ID` | порожньо | Лише для ключа рівня організації: з нього складається заголовок `anthropic-workspace-id` |
 | `TELEGRAM_BOT_TOKEN` | — | Обов'язково. Токен від @BotFather |
 | `TELEGRAM_ALLOWED_USER_IDS` | — | Числові id, через кому. Дізнатись у @userinfobot |
 | `TELEGRAM_ALLOWED_USERNAMES` | — | `@username` через кому, як альтернатива id. Хоча б один зі списків має бути непорожній |
@@ -305,6 +306,7 @@ python -m pytest
 |---|---|
 | `Не задано ANTHROPIC_API_KEY` | Змінні не експортовані в оточення процесу (SDK не читає `.env`) |
 | `Invalid API key` / `Not logged in` | Ключ невірний або скінчились кредити в Console |
+| `400 This API key is not scoped to a workspace` | Ключ створено на рівні організації. Впиши `ANTHROPIC_WORKSPACE_ID` або перевипусти ключ усередині workspace |
 | `Chromium distribution 'chrome' is not found` | Загубився прапорець `--browser chromium`; MCP пішов шукати системний Google Chrome |
 | `error while loading shared libraries: lib…so` | Немає системних бібліотек chromium → `./scripts/install-browser-libs.sh` (без root) або з root `sudo npx playwright install-deps chromium` |
 | `apt-get download` дає 404 | Застарілий індекс. Скрипт тримає свій у `vendor/apt`; якщо не допомогло — `rm -rf vendor/apt` і запустити ще раз |

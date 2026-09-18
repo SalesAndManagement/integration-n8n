@@ -464,3 +464,26 @@ def test_describe_names_the_sdk_errors(env):
 
     described = agent._describe(ProcessError("failed", exit_code=1, stderr="Invalid API key"))
     assert "кодом 1" in described and "Invalid API key" in described
+
+
+# --- ключ поза workspace ----------------------------------------------------
+
+
+def test_workspace_id_becomes_a_custom_header(env, monkeypatch):
+    """Ключ рівня організації без цього заголовка отримує 400 від API."""
+    monkeypatch.delenv("ANTHROPIC_CUSTOM_HEADERS", raising=False)
+    env.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_123")
+    options = ClaudeAgent(Settings.from_env())._options(chat_id=1)
+    assert options.env["ANTHROPIC_CUSTOM_HEADERS"] == "anthropic-workspace-id: wrkspc_123"
+
+
+def test_manual_custom_headers_win(env, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_CUSTOM_HEADERS", "X-Mine: 1")
+    env.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_123")
+    # Те, що людина вписала руками, не перетираємо.
+    assert ClaudeAgent(Settings.from_env())._options(chat_id=1).env == {}
+
+
+def test_no_workspace_id_no_header(env, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_CUSTOM_HEADERS", raising=False)
+    assert ClaudeAgent(Settings.from_env())._options(chat_id=1).env == {}

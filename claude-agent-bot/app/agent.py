@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -42,6 +43,19 @@ STDERR_IN_REPLY_CHARS = 700
 
 class AgentError(RuntimeError):
     """Помилка виконання з поясненням, придатним для показу прямо в чаті."""
+
+
+def _api_env(settings: Settings) -> dict[str, str]:
+    """Додаткові змінні для процесу Claude Code.
+
+    Ключ, створений на рівні організації, а не всередині workspace, отримує
+    400 і вимагає заголовок anthropic-workspace-id. Claude Code вміє додавати
+    довільні заголовки через ANTHROPIC_CUSTOM_HEADERS — складаємо його самі,
+    щоб у .env треба було вписати лише id workspace.
+    """
+    if not settings.workspace_id or os.environ.get("ANTHROPIC_CUSTOM_HEADERS"):
+        return {}
+    return {"ANTHROPIC_CUSTOM_HEADERS": f"anthropic-workspace-id: {settings.workspace_id}"}
 
 
 @dataclass
@@ -142,6 +156,7 @@ class ClaudeAgent:
             can_use_tool = self._deny_unlisted
 
         return ClaudeAgentOptions(
+            env=_api_env(settings),
             model=settings.model,
             effort=settings.effort,
             system_prompt=settings.system_prompt,

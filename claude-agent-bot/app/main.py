@@ -38,10 +38,11 @@ def main() -> int:
     application = TelegramBot(settings, agent).build()
 
     log.info(
-        "Старт: модель=%s, каталог=%s, дозволених користувачів=%d",
+        "Старт: модель=%s, каталог=%s, доступ: id %d · @ %d",
         settings.model,
         settings.workspace,
         len(settings.allowed_user_ids),
+        len(settings.allowed_usernames),
     )
     application.run_polling(drop_pending_updates=True)
     return 0

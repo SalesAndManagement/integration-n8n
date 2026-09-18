@@ -62,6 +62,7 @@ class Settings:
     allowed_usernames: frozenset[str]
     model: str
     effort: str
+    workspace_id: str
     max_budget_usd: float
     max_turns: int
     workspace: Path
@@ -132,6 +133,7 @@ class Settings:
             allowed_user_ids=user_ids,
             allowed_usernames=usernames,
             model=os.getenv("CLAUDE_MODEL", "claude-opus-5").strip() or "claude-opus-5",
+            workspace_id=os.getenv("ANTHROPIC_WORKSPACE_ID", "").strip(),
             effort=effort,
             max_budget_usd=_float("MAX_BUDGET_USD", 0.5),
             max_turns=_int("MAX_TURNS", 20),
