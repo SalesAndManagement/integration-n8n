@@ -84,21 +84,35 @@ bash scripts/bootstrap-server.sh
 ## Крок 2. Конфігурація
 
 ```bash
-cp .env.example .env
-
-# згенерувати секрети
-echo "N8N_ENCRYPTION_KEY=$(openssl rand -hex 32)"
-echo "POSTGRES_PASSWORD=$(openssl rand -base64 24)"
-echo "POSTGRES_NON_ROOT_PASSWORD=$(openssl rand -base64 24)"
-
-nano .env   # вставте згенероване + впишіть N8N_DOMAIN і LETSENCRYPT_EMAIL
+./scripts/init-env.sh n8n.вашдомен.com ваша@пошта.com
 ```
 
-Обов'язково до заповнення: `N8N_DOMAIN`, `LETSENCRYPT_EMAIL`,
-`POSTGRES_PASSWORD`, `POSTGRES_NON_ROOT_PASSWORD`, `N8N_ENCRYPTION_KEY`.
+Скрипт створює `.env` із шаблону: генерує паролі БД і `N8N_ENCRYPTION_KEY`,
+підбирає розмір пулу з'єднань під кількість ядер, ставить права `600`.
+Наприкінці друкує ключ шифрування — **збережіть його в менеджер паролів**.
 
-> ⚠️ **`N8N_ENCRYPTION_KEY` після першого запуску не змінювати.** Ним зашифровані
-> всі credentials у базі. Збережіть його в менеджері паролів окремо від сервера.
+Без аргументів скрипт спитає домен і пошту інтерактивно. Решту значень у
+`.env` можна не чіпати — дефолти робочі.
+
+Що означають основні змінні:
+
+| Змінна | Що ставити |
+|---|---|
+| `N8N_DOMAIN` | ваш піддомен, напр. `n8n.company.com` — без `https://` і без слеша |
+| `LETSENCRYPT_EMAIL` | реальна пошта: туди Let's Encrypt пише, якщо сертифікат не оновився |
+| `TIMEZONE` | `Europe/Warsaw` — впливає на розклади Cron-нод і час у логах |
+| `POSTGRES_DB` / `POSTGRES_USER` | `n8n` / `postgres` — лишіть як є |
+| `POSTGRES_PASSWORD` | адмінський пароль БД, генерується скриптом |
+| `POSTGRES_NON_ROOT_USER` | `n8n` — від нього працює додаток, лишіть як є |
+| `POSTGRES_NON_ROOT_PASSWORD` | пароль додатка, генерується скриптом |
+| `DB_POSTGRESDB_POOL_SIZE` | ×2 від кількості ядер, ставить скрипт |
+| `N8N_ENCRYPTION_KEY` | генерується скриптом; **після першого запуску не міняти** |
+| `N8N_IMAGE_TAG` | `latest`, або конкретна версія (`1.115.2`) для продакшену |
+| `EXECUTIONS_DATA_MAX_AGE` | скільки годин тримати історію виконань (336 = 14 днів) |
+| `EXECUTIONS_MODE` | `regular`; `queue` — лише якщо вмикаєте воркери |
+
+> ⚠️ `N8N_ENCRYPTION_KEY` — це ключ від усіх збережених credentials (API-токени,
+> паролі SMTP, OAuth). Дамп бази без нього не відновити. Тримайте копію поза сервером.
 
 ## Крок 3. Запуск
 
@@ -133,6 +147,7 @@ docker compose restart n8n
 
 | Дія | Команда |
 |---|---|
+| Створити/перезібрати .env | `./scripts/init-env.sh` |
 | Перевірка DNS/портів | `./scripts/check-dns.sh` |
 | Статус | `docker compose ps` |
 | Логи | `docker compose logs -f n8n` |

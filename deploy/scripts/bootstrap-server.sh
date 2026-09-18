@@ -14,8 +14,8 @@ apt-get update -qq
 apt-get upgrade -y -qq
 apt-get install -y -qq ca-certificates curl gnupg ufw fail2ban unattended-upgrades
 
-log "Часовий пояс -> ${TIMEZONE:-Europe/Kyiv}"
-timedatectl set-timezone "${TIMEZONE:-Europe/Kyiv}"
+log "Часовий пояс -> ${TIMEZONE:-Europe/Warsaw}"
+timedatectl set-timezone "${TIMEZONE:-Europe/Warsaw}"
 
 if ! command -v docker >/dev/null 2>&1; then
   log "Встановлення Docker Engine + compose plugin"
