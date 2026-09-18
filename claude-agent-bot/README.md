@@ -132,13 +132,21 @@ nano .env                     # ключі
 Тримати процес живим без systemd:
 
 ```bash
-# найпростіше
+# запуск у фоні
 nohup ./scripts/run-native.sh > data/bot.log 2>&1 &
+
+# зупинка
+./scripts/stop-native.sh
 
 # автостарт після перезавантаження, без root
 crontab -e
 @reboot cd ~/integration-n8n/claude-agent-bot && ./scripts/run-native.sh >> data/bot.log 2>&1
 ```
+
+`run-native.sh` пише свій PID у `data/bot.pid` (`exec` зберігає той самий процес, тож
+у файлі саме бот), а `stop-native.sh` б'є точно по ньому й перед цим звіряє `cmdline`.
+**Не зупиняй бота через `pkill -f app.main`**: на спільному сервері цей шаблон збігається
+з чужими процесами.
 
 Якщо на сервері дозволені user-юніти systemd — надійніше через них:
 `systemctl --user enable --now claude-agent-bot` (юніт треба створити самому,

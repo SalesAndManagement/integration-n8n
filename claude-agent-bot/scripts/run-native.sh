@@ -16,4 +16,9 @@ export CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$ROOT/data/claude}"
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}"
 mkdir -p "$CLAUDE_CONFIG_DIR"
 
+# exec зберігає той самий PID, тому у файлі опиниться саме процес бота,
+# а не проміжна оболонка. Так stop-native.sh б'є точно, без pkill по шаблону.
+mkdir -p data
+echo $$ > data/bot.pid
+
 exec ./.venv/bin/python -m app.main
