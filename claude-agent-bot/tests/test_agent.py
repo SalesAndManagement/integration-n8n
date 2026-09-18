@@ -491,3 +491,13 @@ def test_manual_custom_headers_win(env, monkeypatch):
 def test_no_workspace_id_no_header(env, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_CUSTOM_HEADERS", raising=False)
     assert ClaudeAgent(Settings.from_env())._options(chat_id=1).env == {}
+
+
+def test_duplicate_keys_are_reported(tmp_path):
+    """«Я ж замінив ключ» — а в файлі два рядки, і діє останній."""
+    from app.env_file import find_duplicates, parse_env_file
+
+    text = "ANTHROPIC_API_KEY=sk-ant-старий\nMODEL=x\nANTHROPIC_API_KEY=sk-ant-новий\n"
+    assert find_duplicates(text) == {"ANTHROPIC_API_KEY": 2}
+    assert parse_env_file(text)["ANTHROPIC_API_KEY"] == "sk-ant-новий"  # останній
+    assert find_duplicates("A=1\nB=2\n") == {}

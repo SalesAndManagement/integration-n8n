@@ -15,6 +15,30 @@ log = logging.getLogger(__name__)
 QUOTES = ("'", '"')
 
 
+def find_duplicates(text: str) -> dict[str, int]:
+    """Скільки разів кожен ключ трапляється у файлі (лише ті, що більше разу).
+
+    Дублікат — типова помилка при ручному редагуванні: новий рядок дописали,
+    старий лишили. Перемагає останній, а це рідко те, чого чекають.
+    """
+    counts: dict[str, int] = {}
+    for key in _keys(text):
+        counts[key] = counts.get(key, 0) + 1
+    return {key: count for key, count in counts.items() if count > 1}
+
+
+def _keys(text: str):
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].lstrip()
+        key, sep, _ = line.partition("=")
+        if sep and key.strip():
+            yield key.strip()
+
+
 def parse_env_file(text: str) -> dict[str, str]:
     """KEY=VALUE по рядках. Порожні рядки й коментарі ігноруються."""
     values: dict[str, str] = {}
@@ -52,6 +76,16 @@ def load_env_file(path: str | Path | None = None) -> int:
     except OSError as exc:
         log.warning("Не вдалося прочитати %s: %s", env_path, exc)
         return 0
+
+    duplicates = find_duplicates(text)
+    if duplicates:
+        for key, count in duplicates.items():
+            log.warning(
+                "У %s ключ %s трапляється %d рази — діє останній. Прибери зайві рядки.",
+                env_path,
+                key,
+                count,
+            )
 
     loaded = 0
     for key, value in parse_env_file(text).items():

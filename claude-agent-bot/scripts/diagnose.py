@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import pathlib
 import sys
 import traceback
 
@@ -15,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.agent import ClaudeAgent  # noqa: E402
 from app.config import ConfigError, Settings  # noqa: E402
-from app.env_file import load_env_file  # noqa: E402
+from app.env_file import find_duplicates, load_env_file  # noqa: E402
 
 BOLD = "\033[1m"
 RED = "\033[31m"
@@ -41,11 +42,25 @@ def note(text: str) -> None:
 
 
 def mask(value: str) -> str:
-    return f"{value[:14]}…{value[-4:]}" if len(value) > 20 else "(порожньо)"
+    # Показуємо більше початку: так видно, чи це справді новий ключ.
+    return f"{value[:24]}…{value[-4:]} ({len(value)} символів)" if len(value) > 30 else "(порожньо або обрізаний)"
+
+
+def check_env_file() -> None:
+    """Дублікат рядка в .env — часта причина «я ж замінив ключ, а він старий»."""
+    path = pathlib.Path(".env")
+    if not path.is_file():
+        note(".env не знайдено поруч — беру лише змінні оточення")
+        return
+    duplicates = find_duplicates(path.read_text(encoding="utf-8"))
+    for key, count in duplicates.items():
+        bad(f"у .env {count} рядки з {key} — діє ОСТАННІЙ. Прибери зайві:")
+        print(f"      grep -n '^{key}=' .env")
 
 
 def check_settings() -> Settings | None:
     head("1. Налаштування")
+    check_env_file()
     try:
         settings = Settings.from_env()
     except ConfigError as exc:
@@ -83,12 +98,20 @@ def check_api(settings: Settings) -> bool:
         "max_tokens": 16,
         "messages": [{"role": "user", "content": "ping"}],
     }
+    stray = [name for name, value in headers.items() if not str(value).isascii()]
+    if stray:
+        bad(f"у значеннях {', '.join(stray)} є нелатинські символи — ключ скопійовано з чимось зайвим")
+        return False
+
     try:
         response = httpx.post(
             "https://api.anthropic.com/v1/messages", headers=headers, json=payload, timeout=60
         )
     except httpx.HTTPError as exc:
         bad(f"мережа: {exc}")
+        return False
+    except (UnicodeEncodeError, ValueError) as exc:
+        bad(f"запит не склався: {exc}")
         return False
 
     workspace = response.headers.get("anthropic-workspace-id", "—")
