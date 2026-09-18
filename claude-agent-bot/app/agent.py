@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,9 +13,13 @@ from typing import Any
 
 from claude_agent_sdk import (
     AssistantMessage,
+    CLIConnectionError,
+    CLIJSONDecodeError,
+    CLINotFoundError,
     ClaudeAgentOptions,
     PermissionResultAllow,
     PermissionResultDeny,
+    ProcessError,
     ResultMessage,
     TextBlock,
     ToolPermissionContext,
@@ -31,6 +36,12 @@ from .tools import build_n8n_server
 log = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[str], Awaitable[None]]
+STDERR_TAIL_LINES = 20
+STDERR_IN_REPLY_CHARS = 700
+
+
+class AgentError(RuntimeError):
+    """Помилка виконання з поясненням, придатним для показу прямо в чаті."""
 
 
 @dataclass
@@ -55,6 +66,9 @@ class ClaudeAgent:
             self._mcp_servers[BROWSER_SERVER_NAME] = build_playwright_server(settings)
         self._sessions: dict[int, str] = {}
         self._locks: dict[int, asyncio.Lock] = {}
+        # Справжня причина падіння зазвичай у stderr процесу Claude Code,
+        # а він до цього йшов тільки в debug-лог. Тримаємо хвіст напоготові.
+        self._stderr: deque[str] = deque(maxlen=STDERR_TAIL_LINES)
         self._load_state()
 
     # --- стан сесій -------------------------------------------------------
@@ -141,8 +155,35 @@ class ClaudeAgent:
             max_turns=settings.max_turns,
             max_budget_usd=settings.max_budget_usd,
             resume=self._sessions.get(chat_id),
-            stderr=lambda line: log.debug("cli: %s", line.rstrip()),
+            stderr=self._record_stderr,
         )
+
+    def _record_stderr(self, line: str) -> None:
+        text = line.rstrip()
+        if text:
+            self._stderr.append(text)
+        log.debug("cli: %s", text)
+
+    def _describe(self, exc: Exception) -> str:
+        """Коротке пояснення українською замість голого трейсбека."""
+        if isinstance(exc, CLINotFoundError):
+            head = "Не знайдено виконуваний файл Claude Code. Перевстанови: ./scripts/setup-native.sh"
+        elif isinstance(exc, ProcessError):
+            code = getattr(exc, "exit_code", None)
+            head = f"Процес Claude Code завершився з кодом {code}."
+        elif isinstance(exc, CLIConnectionError):
+            head = "Обірвався звʼязок із процесом Claude Code."
+        elif isinstance(exc, CLIJSONDecodeError):
+            head = "Не вдалося розібрати відповідь Claude Code."
+        else:
+            head = f"{type(exc).__name__}: {exc}"
+
+        details = str(getattr(exc, "stderr", "") or "").strip()
+        if not details and self._stderr:
+            details = "\n".join(self._stderr)
+        if details:
+            head += "\n\n" + details[-STDERR_IN_REPLY_CHARS:]
+        return head
 
     async def ask(
         self,
@@ -156,17 +197,22 @@ class ClaudeAgent:
             tools_used: list[str] = []
             result: ResultMessage | None = None
 
-            async for message in query(prompt=prompt, options=self._options(chat_id)):
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if isinstance(block, TextBlock):
-                            texts.append(block.text)
-                        elif isinstance(block, ToolUseBlock):
-                            tools_used.append(block.name)
-                            if on_progress is not None:
-                                await on_progress(block.name)
-                elif isinstance(message, ResultMessage):
-                    result = message
+            self._stderr.clear()
+            try:
+                async for message in query(prompt=prompt, options=self._options(chat_id)):
+                    if isinstance(message, AssistantMessage):
+                        for block in message.content:
+                            if isinstance(block, TextBlock):
+                                texts.append(block.text)
+                            elif isinstance(block, ToolUseBlock):
+                                tools_used.append(block.name)
+                                if on_progress is not None:
+                                    await on_progress(block.name)
+                    elif isinstance(message, ResultMessage):
+                        result = message
+            except Exception as exc:
+                log.exception("Запит у чаті %s впав", chat_id)
+                raise AgentError(self._describe(exc)) from exc
 
             if result is None:
                 return AgentReply(text="Агент не повернув результату. Дивись логи сервісу.", is_error=True)

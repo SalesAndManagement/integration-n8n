@@ -16,7 +16,7 @@ from telegram.ext import (
     filters,
 )
 
-from .agent import AgentReply, ClaudeAgent
+from .agent import AgentError, AgentReply, ClaudeAgent
 from .config import Settings
 
 log = logging.getLogger(__name__)
@@ -203,9 +203,16 @@ class TelegramBot:
         typing_task = asyncio.create_task(_keep_typing(context.bot, chat_id))
         try:
             reply = await self._agent.ask(chat_id, prompt)
-        except Exception:
+        except AgentError as exc:
+            # Причину показуємо в чаті: інакше єдиний спосіб її дізнатись — лізти в логи.
+            for chunk in split_message(f"⚠️ Не вдалося виконати.\n\n{exc}"):
+                await message.reply_text(chunk)
+            return
+        except Exception as exc:
             log.exception("Помилка під час обробки запиту в чаті %s", chat_id)
-            await message.reply_text("Щось пішло не так під час виконання. Деталі — у логах сервісу.")
+            await message.reply_text(
+                f"⚠️ Несподівана помилка: {type(exc).__name__}: {exc}\n\nПовний трейсбек — у data/bot.log."
+            )
             return
         finally:
             typing_task.cancel()

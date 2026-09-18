@@ -422,3 +422,45 @@ def test_allowed_user_filter(env):
     assert not allowed.filter(_FakeMessage(_FakeUser(999, "stranger")))
     assert not allowed.filter(_FakeMessage(_FakeUser(999, None)))  # username може не бути
     assert not allowed.filter(_FakeMessage(None))
+
+
+# --- помилки видно в чаті ---------------------------------------------------
+
+
+def test_ask_wraps_failures_with_stderr(env, monkeypatch):
+    """Причина падіння живе в stderr процесу Claude Code — вона має дійти до чату."""
+    from app import agent as agent_module
+
+    agent = ClaudeAgent(Settings.from_env())
+
+    def exploding_query(prompt, options):
+        options.stderr("Error: connect ECONNREFUSED 127.0.0.1:443")
+        options.stderr("")
+
+        async def gen():
+            raise RuntimeError("boom")
+            yield  # pragma: no cover
+
+        return gen()
+
+    monkeypatch.setattr(agent_module, "query", exploding_query)
+
+    with pytest.raises(agent_module.AgentError) as err:
+        asyncio.run(agent.ask(1, "привіт"))
+
+    text = str(err.value)
+    assert "RuntimeError: boom" in text
+    assert "ECONNREFUSED" in text  # хвіст stderr прикріплено
+
+
+def test_describe_names_the_sdk_errors(env):
+    from claude_agent_sdk import CLINotFoundError, ProcessError
+
+    from app.agent import AgentError  # noqa: F401  (перевіряємо, що експортується)
+
+    agent = ClaudeAgent(Settings.from_env())
+
+    assert "setup-native.sh" in agent._describe(CLINotFoundError("not found"))
+
+    described = agent._describe(ProcessError("failed", exit_code=1, stderr="Invalid API key"))
+    assert "кодом 1" in described and "Invalid API key" in described
