@@ -386,6 +386,22 @@ def test_only_usernames_is_enough_to_start(env):
     assert settings.allowed_usernames == frozenset({"petrdoroshsm"})
 
 
+def test_placeholder_in_ids_is_named_in_the_error(env):
+    """Найчастіша помилка: у .env лишився текст-заповнювач замість числа."""
+    env.setenv("TELEGRAM_ALLOWED_USER_IDS", "твій_id")
+    with pytest.raises(ConfigError) as err:
+        Settings.from_env()
+    message = str(err.value)
+    assert "твій_id" in message  # видно, що саме виправляти
+    assert "@userinfobot" in message and "TELEGRAM_ALLOWED_USERNAMES" in message
+
+
+def test_negative_ids_are_accepted(env):
+    """У груп і каналів id відʼємні — не приймати їх було б помилкою."""
+    env.setenv("TELEGRAM_ALLOWED_USER_IDS", "-1001234567890, 111")
+    assert Settings.from_env().allowed_user_ids == frozenset({-1001234567890, 111})
+
+
 def test_no_ids_and_no_usernames_refuses_to_start(env):
     env.delenv("TELEGRAM_ALLOWED_USER_IDS")
     env.setenv("TELEGRAM_ALLOWED_USERNAMES", "")

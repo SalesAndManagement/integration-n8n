@@ -96,10 +96,14 @@ class Settings:
         _required("ANTHROPIC_API_KEY")
 
         raw_ids = _csv("TELEGRAM_ALLOWED_USER_IDS")
-        try:
-            user_ids = frozenset(int(uid) for uid in raw_ids)
-        except ValueError as exc:
-            raise ConfigError(f"TELEGRAM_ALLOWED_USER_IDS має містити числові id: {exc}") from exc
+        bad = [value for value in raw_ids if not value.lstrip("-").isdigit()]
+        if bad:
+            raise ConfigError(
+                f"TELEGRAM_ALLOWED_USER_IDS приймає лише числа, а тут: {', '.join(bad)}. "
+                "Свій id дізнайся у @userinfobot. Якщо id ще невідомі — лиши рядок "
+                "порожнім і впиши @username у TELEGRAM_ALLOWED_USERNAMES."
+            )
+        user_ids = frozenset(int(uid) for uid in raw_ids)
 
         # Telegram віддає username у тому регістрі, у якому його зареєстровано,
         # тож порівнюємо в нижньому. Ведучу @ прибираємо — її пишуть за звичкою.
