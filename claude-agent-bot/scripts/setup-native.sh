@@ -142,8 +142,8 @@ if [ -n "$NODE_BIN" ] && [ -n "$NPM_BIN" ]; then
 
     # Головна перевірка безрутового встановлення: системні бібліотеки chromium
     # ставляться через apt, а це вже потребує root. Дивимось, чого бракує.
-    BIN="$(find "$PLAYWRIGHT_BROWSERS_PATH" -type f -name 'headless_shell' 2>/dev/null | head -1)"
-    [ -n "$BIN" ] || BIN="$(find "$PLAYWRIGHT_BROWSERS_PATH" -type f -name 'chrome' 2>/dev/null | head -1)"
+    BIN="$(find "$PLAYWRIGHT_BROWSERS_PATH" -type f -name 'headless_shell' 2>/dev/null | head -1 || true)"
+    [ -n "$BIN" ] || BIN="$(find "$PLAYWRIGHT_BROWSERS_PATH" -type f -name 'chrome' 2>/dev/null | head -1 || true)"
     if [ -z "$BIN" ]; then
         warn "не знайшов бінарник chromium — браузер буде вимкнено"
     else

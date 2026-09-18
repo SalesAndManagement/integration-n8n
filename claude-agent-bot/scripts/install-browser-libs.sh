@@ -38,56 +38,76 @@ apt_cache() { apt-cache "${APT_OPTS[@]}" "$@"; }
 # що запускається, а ці бібліотеки в системі вже є.
 NEVER="libc6 libc-bin libgcc-s1 libstdc++6 zlib1g"
 
-# Яка бібліотека в якому пакеті. На нових Debian/Ubuntu частина пакетів
-# має суфікс t64 — перевіряємо обидві назви.
-pkg_for_soname() {
-    local base
-    case "$1" in
-        libpango-1.0.so.0|libpangoft2-1.0.so.0) base=libpango-1.0-0 ;;
-        libpangocairo-1.0.so.0) base=libpangocairo-1.0-0 ;;
-        libcairo.so.2) base=libcairo2 ;;
-        libnss3.so|libsmime3.so|libnssutil3.so|libssl3.so) base=libnss3 ;;
-        libnspr4.so|libplc4.so|libplds4.so) base=libnspr4 ;;
-        libxkbcommon.so.0) base=libxkbcommon0 ;;
-        libatk-1.0.so.0) base=libatk1.0-0 ;;
-        libatk-bridge-2.0.so.0) base=libatk-bridge2.0-0 ;;
-        libatspi.so.0) base=libatspi2.0-0 ;;
-        libcups.so.2) base=libcups2 ;;
-        libdbus-1.so.3) base=libdbus-1-3 ;;
-        libdrm.so.2) base=libdrm2 ;;
-        libgbm.so.1) base=libgbm1 ;;
-        libexpat.so.1) base=libexpat1 ;;
-        libxcomposite.so.1) base=libxcomposite1 ;;
-        libxdamage.so.1) base=libxdamage1 ;;
-        libxfixes.so.3) base=libxfixes3 ;;
-        libxrandr.so.2) base=libxrandr2 ;;
-        libxrender.so.1) base=libxrender1 ;;
-        libxtst.so.6) base=libxtst6 ;;
-        libxshmfence.so.1) base=libxshmfence1 ;;
-        libasound.so.2) base=libasound2 ;;
-        libglib-2.0.so.0|libgobject-2.0.so.0|libgio-2.0.so.0) base=libglib2.0-0 ;;
-        libgtk-3.so.0) base=libgtk-3-0 ;;
-        libgdk_pixbuf-2.0.so.0) base=libgdk-pixbuf-2.0-0 ;;
-        libudev.so.1) base=libudev1 ;;
-        libwayland-client.so.0) base=libwayland-client0 ;;
-        libharfbuzz.so.0) base=libharfbuzz0b ;;
-        libfontconfig.so.1) base=libfontconfig1 ;;
-        libfreetype.so.6) base=libfreetype6 ;;
-        *) return 1 ;;
+# Кандидати-пакети для soname. Порівнюємо в нижньому регістрі: реальні імена
+# бувають з великими літерами (libXdamage.so.1), а імена пакетів — ні.
+pkg_candidates() {
+    local soname lower base ver
+    soname="$1"
+    lower="$(printf '%s' "$soname" | tr 'A-Z' 'a-z')"
+
+    case "$lower" in
+        libpango-1.0.so.0|libpangoft2-1.0.so.0) echo libpango-1.0-0; return ;;
+        libpangocairo-1.0.so.0) echo libpangocairo-1.0-0; return ;;
+        libcairo.so.2) echo libcairo2; return ;;
+        libcairo-gobject.so.2) echo libcairo-gobject2; return ;;
+        libnss3.so|libsmime3.so|libnssutil3.so|libssl3.so) echo libnss3; return ;;
+        libnspr4.so|libplc4.so|libplds4.so) echo libnspr4; return ;;
+        libatk-1.0.so.0) echo libatk1.0-0; return ;;
+        libatk-bridge-2.0.so.0) echo libatk-bridge2.0-0; return ;;
+        libatspi.so.0) echo libatspi2.0-0; return ;;
+        libcups.so.2) echo libcups2; return ;;
+        libdbus-1.so.3) echo libdbus-1-3; return ;;
+        libgbm.so.1) echo libgbm1; return ;;
+        libglib-2.0.so.0|libgobject-2.0.so.0|libgio-2.0.so.0|libgmodule-2.0.so.0) echo libglib2.0-0; return ;;
+        libgtk-3.so.0) echo libgtk-3-0; return ;;
+        libgdk-3.so.0) echo libgtk-3-0; return ;;
+        libgdk_pixbuf-2.0.so.0) echo libgdk-pixbuf-2.0-0; return ;;
+        libharfbuzz.so.0) echo libharfbuzz0b; return ;;
+        libjpeg.so.62) echo libjpeg62-turbo; return ;;
+        libbrotlidec.so.1|libbrotlicommon.so.1) echo libbrotli1; return ;;
+        libpcre2-8.so.0) echo libpcre2-8-0; return ;;
+        libpixman-1.so.0) echo libpixman-1-0; return ;;
+        libpng16.so.16) echo libpng16-16; return ;;
+        libgraphite2.so.3) echo libgraphite2-3; return ;;
+        libepoxy.so.0) echo libepoxy0; return ;;
+        libxcb-*.so.0) echo "lib${lower#lib}" | sed 's/\.so\.0$/-0/'; return ;;
+        libx11-xcb.so.1) echo libx11-xcb1; return ;;
+        libwayland-*.so.0) echo "${lower%.so.0}0"; return ;;
     esac
-    if apt_cache show "$base" >/dev/null 2>&1; then
-        echo "$base"
-    elif apt_cache show "${base}t64" >/dev/null 2>&1; then
-        echo "${base}t64"
+
+    # Загальне правило: libXdamage.so.1 -> libxdamage1, libfoo.so.3 -> libfoo3 / libfoo-3.
+    base="${lower%%.so*}"
+    ver="${soname##*.so}"
+    ver="${ver#.}"
+    if [ -n "$ver" ]; then
+        echo "$base$ver" "$base-$ver" "$base"
     else
-        return 1
+        echo "$base"
     fi
+}
+
+# Перша назва, яка існує в індексі. На Debian 13 / Ubuntu 24.04 справжній пакет
+# часто має суфікс t64, а без нього лишається порожній transitional — тому t64 першим.
+pkg_for_soname() {
+    local candidate name found
+    for candidate in $(pkg_candidates "$1"); do
+        for name in "${candidate}t64" "$candidate"; do
+            # Саме grep -c, а не grep -q: -q виходить на першому збігу, apt-cache
+            # отримує SIGPIPE, і pipefail видає це за «пакета немає».
+            found="$(apt_cache show "$name" 2>/dev/null | grep -c '^Filename:' || true)"
+            if [ "${found:-0}" -gt 0 ]; then
+                echo "$name"
+                return 0
+            fi
+        done
+    done
+    return 1
 }
 
 browser_binary() {
     local bin
-    bin="$(find "$PLAYWRIGHT_BROWSERS_PATH" -type f -name 'headless_shell' 2>/dev/null | head -1)"
-    [ -n "$bin" ] || bin="$(find "$PLAYWRIGHT_BROWSERS_PATH" -type f -name 'chrome' 2>/dev/null | head -1)"
+    bin="$(find "$PLAYWRIGHT_BROWSERS_PATH" -type f -name 'headless_shell' 2>/dev/null | head -1 || true)"
+    [ -n "$bin" ] || bin="$(find "$PLAYWRIGHT_BROWSERS_PATH" -type f -name 'chrome' 2>/dev/null | head -1 || true)"
     echo "$bin"
 }
 
@@ -112,6 +132,7 @@ else
 fi
 
 mkdir -p "$LIBDIR" "$DEBDIR"
+TRIED=""
 
 if [ -n "$MISSING" ]; then
     say "Оновлюю власний індекс apt (у $APTDIR)"
@@ -129,8 +150,12 @@ while [ -n "$MISSING" ] && [ "$ROUND" -lt 5 ]; do
     WANTED=""
     UNKNOWN=""
     for soname in $MISSING; do
+        # Пакет для цієї бібліотеки вже качали, а її досі немає — вгадали не той.
+        # Далі не перебираємо, інакше кола крутитимуться даремно.
+        case " $TRIED " in *" $soname "*) UNKNOWN="$UNKNOWN $soname"; continue ;; esac
         if pkg="$(pkg_for_soname "$soname" 2>/dev/null)"; then
             WANTED="$WANTED $pkg"
+            TRIED="$TRIED $soname"
         else
             UNKNOWN="$UNKNOWN $soname"
         fi
@@ -150,6 +175,10 @@ while [ -n "$MISSING" ] && [ "$ROUND" -lt 5 ]; do
     TO_GET=""
     for pkg in $ALL; do
         case " $NEVER " in *" $pkg "*) continue ;; esac
+        # Пакети, які ми самі шукали через відсутню бібліотеку, качаємо завжди:
+        # dpkg може вважати їх встановленими, хоч це порожній transitional-пакет,
+        # а справжні файли лежать у версії з суфіксом t64.
+        case " $WANTED " in *" $pkg "*) TO_GET="$TO_GET $pkg"; continue ;; esac
         # FORCE_DOWNLOAD=1 — качати й те, що в системі вже є (стара версія бібліотеки)
         if [ "${FORCE_DOWNLOAD:-0}" != "1" ]; then
             dpkg -s "$pkg" >/dev/null 2>&1 && continue   # уже є в системі
