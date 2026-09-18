@@ -95,14 +95,18 @@ nano .env                     # ключі
 ./scripts/run-native.sh       # запуск
 ```
 
-Скрипт нічого не чіпає поза цією папкою та `~/.cache/ms-playwright`, сам проставляє шляхи
-в `.env` і перевіряє, чи запуститься chromium: системні бібліотеки для нього ставляться
-через apt, тобто потребують root. Якщо чогось бракує — він назве конкретні `.so`, поставить
-`BROWSER_ENABLED=0` і піде далі. `WebSearch` і `WebFetch` працюють без браузера, тож агент
-лишається робочим; коли з'явиться root, досить одного разу виконати
-`sudo npx playwright install-deps chromium` і повернути `BROWSER_ENABLED=1`.
+Скрипт нічого не чіпає поза цією папкою та `~/.cache` і сам обходить те, що без root
+не ставиться:
 
-Немає Node — скрипт скаже, як поставити його без root через `nvm`.
+| Перешкода | Що робить скрипт |
+|---|---|
+| `python3 -m venv` падає з `ensurepip is not available` (немає пакета `python3-venv`) | Ставить `uv` у `~/.local/bin` і створює venv ним. Якщо й системний Python не годиться — `uv` завантажує власний Python 3.12 |
+| Немає Node | Качає офіційний тарбол у `vendor/node`, без `nvm` і без змін у `~/.bashrc` |
+| Chromium не запуститься без системних бібліотек (вони з apt, тобто з root) | Перевіряє бінарник через `ldd`, називає конкретні `.so`, ставить `BROWSER_ENABLED=0` і йде далі |
+
+Останній випадок не ламає агента: `WebSearch` і `WebFetch` працюють без браузера. Коли
+з'явиться root, досить раз виконати `sudo npx playwright install-deps chromium` і повернути
+`BROWSER_ENABLED=1`.
 
 Тримати процес живим без systemd:
 
@@ -165,6 +169,7 @@ crontab -e
 | `BROWSER_CAPS` | `vision,pdf` | Додаткові можливості: `vision`, `pdf`, `devtools` |
 | `BROWSER_MCP_COMMAND` | `npx` | У Docker перекрито на `playwright-mcp` (пакет уже в образі) |
 | `BROWSER_MCP_CLI` | порожньо | Шлях до `cli.js` при встановленні без root; проставляє `setup-native.sh` |
+| `BROWSER_NODE` | `node` | Який `node` запускати. `setup-native.sh` ставить сюди `vendor/node/bin/node`, якщо качав його сам |
 | `N8N_WEBHOOK_BASE_URL` | порожньо | База n8n. Порожня — `trigger_workflow` поверне помилку |
 | `N8N_WEBHOOK_TOKEN` | порожньо | Значення заголовка `Authorization` для Header Auth у n8n |
 | `LOG_LEVEL` | `INFO` | `DEBUG` покаже stderr CLI-процесу агента |

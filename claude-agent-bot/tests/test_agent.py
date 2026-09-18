@@ -169,6 +169,12 @@ def test_browser_from_local_install(env, tmp_path):
     config = build_playwright_server(Settings.from_env())
     assert config["command"] == "node"
     assert config["args"][0] == str(cli)
+
+    # Node теж може бути локальним — тоді запускаємо саме його, а не той, що в PATH
+    env.setenv("BROWSER_NODE", str(tmp_path / "vendor" / "node" / "bin" / "node"))
+    assert build_playwright_server(Settings.from_env())["command"] == str(
+        tmp_path / "vendor" / "node" / "bin" / "node"
+    )
     assert "--browser" in config["args"] and "--headless" in config["args"]
 
 
