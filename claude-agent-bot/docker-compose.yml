@@ -5,14 +5,21 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      # Перекриває значення з .env: усередині контейнера шляхи фіксовані.
+      # Усередині контейнера шляхи фіксовані — перекриваємо те, що стоїть у .env.
       AGENT_WORKSPACE: /data/workspace
       STATE_FILE: /data/sessions.json
       CLAUDE_CONFIG_DIR: /data/claude
+      BROWSER_PROFILE_DIR: /data/browser-profile
+      BROWSER_MCP_COMMAND: playwright-mcp
     volumes:
-      - agent-data:/data
+      # Уся папка агента лежить на хості поруч із цим файлом — її видно й можна бекапити.
+      - ./data:/data
       # Дати агенту читати колекцію workflow'ів цього репозиторію (тільки читання):
       # - ../workflows:/data/workspace/workflows:ro
+    # chromium падає на дефолтних 64МБ /dev/shm
+    shm_size: "1gb"
+    # Без init у контейнері накопичуються зомбі-процеси браузера
+    init: true
     networks: [agent-net]
 
   # Піднімається лише з профілем: docker compose --profile n8n up -d
@@ -32,7 +39,6 @@ services:
     networks: [agent-net]
 
 volumes:
-  agent-data:
   n8n-data:
 
 networks:

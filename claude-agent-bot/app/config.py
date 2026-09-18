@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_ALLOWED_TOOLS = "Read,Glob,Grep,WebSearch,WebFetch,mcp__n8n__trigger_workflow"
+DEFAULT_BROWSER_PACKAGE = "@playwright/mcp@0.0.81"
+AGENT_MODES = ("sandbox", "restricted")
 DEFAULT_SYSTEM_PROMPT = "Ти — робочий асистент у Telegram. Відповідай стисло й українською."
 
 
@@ -68,6 +70,21 @@ class Settings:
     show_tool_trace: bool
     n8n_webhook_base_url: str
     n8n_webhook_token: str
+    mode: str
+    browser_enabled: bool
+    browser_headless: bool
+    browser_no_sandbox: bool
+    browser_persist_profile: bool
+    browser_profile_dir: Path
+    browser_viewport: str
+    browser_caps: str
+    browser_mcp_command: str
+    browser_mcp_package: str
+
+    @property
+    def is_sandbox(self) -> bool:
+        """У sandbox-режимі агент має всі інструменти Claude Code в межах контейнера."""
+        return self.mode == "sandbox"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -91,6 +108,11 @@ class Settings:
         if effort not in allowed_effort:
             raise ConfigError(f"CLAUDE_EFFORT має бути одним із {sorted(allowed_effort)}, отримано {effort!r}")
 
+        mode = os.getenv("AGENT_MODE", "sandbox").strip().lower() or "sandbox"
+        if mode not in AGENT_MODES:
+            raise ConfigError(f"AGENT_MODE має бути одним із {list(AGENT_MODES)}, отримано {mode!r}")
+
+        data_dir = workspace.parent
         return cls(
             telegram_token=_required("TELEGRAM_BOT_TOKEN"),
             allowed_user_ids=user_ids,
@@ -105,4 +127,17 @@ class Settings:
             show_tool_trace=_bool("SHOW_TOOL_TRACE", True),
             n8n_webhook_base_url=os.getenv("N8N_WEBHOOK_BASE_URL", "").strip().rstrip("/"),
             n8n_webhook_token=os.getenv("N8N_WEBHOOK_TOKEN", "").strip(),
+            mode=mode,
+            browser_enabled=_bool("BROWSER_ENABLED", True),
+            browser_headless=_bool("BROWSER_HEADLESS", True),
+            browser_no_sandbox=_bool("BROWSER_NO_SANDBOX", True),
+            browser_persist_profile=_bool("BROWSER_PERSIST_PROFILE", True),
+            browser_profile_dir=Path(
+                os.getenv("BROWSER_PROFILE_DIR", str(data_dir / "browser-profile"))
+            ).expanduser(),
+            browser_viewport=os.getenv("BROWSER_VIEWPORT", "1280x720").strip() or "1280x720",
+            browser_caps=os.getenv("BROWSER_CAPS", "vision,pdf").strip() or "vision,pdf",
+            browser_mcp_command=os.getenv("BROWSER_MCP_COMMAND", "npx").strip() or "npx",
+            browser_mcp_package=os.getenv("BROWSER_MCP_PACKAGE", DEFAULT_BROWSER_PACKAGE).strip()
+            or DEFAULT_BROWSER_PACKAGE,
         )

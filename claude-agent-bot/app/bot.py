@@ -128,11 +128,18 @@ class TelegramBot:
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         settings = self._settings
         session = self._agent.session_id(update.effective_chat.id)
+        tools = "усі інструменти Claude Code" if settings.is_sandbox else ", ".join(settings.allowed_tools)
+        browser = "вимкнено"
+        if settings.browser_enabled:
+            profile = "профіль зберігається" if settings.browser_persist_profile else "без профілю"
+            browser = f"Playwright, {settings.browser_viewport}, {profile}"
         lines = [
+            f"Режим: {settings.mode}",
             f"Модель: {settings.model} (effort={settings.effort})",
             f"Ліміти: {settings.max_budget_usd}$ / {settings.max_turns} кроків на запит",
             f"Робочий каталог: {settings.workspace}",
-            f"Інструменти: {', '.join(settings.allowed_tools)}",
+            f"Інструменти: {tools}",
+            f"Браузер: {browser}",
             f"n8n: {settings.n8n_webhook_base_url or 'не налаштовано'}",
             f"Сесія: {session or 'нова'}",
         ]

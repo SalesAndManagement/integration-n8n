@@ -2,30 +2,63 @@
 
 Самохостний сервіс: Telegram-бот, усередині якого крутиться агентний цикл Claude Code
 через [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk) (Python).
-Агент має вбудовані інструменти (`Read`, `Glob`, `Grep`, `WebSearch`, `WebFetch`) і власний
-інструмент `trigger_workflow`, який запускає n8n workflow через webhook.
 
-Оплата — **кредити Anthropic API** (platform.claude.com → Billing). Логін від claude.ai
-для сторонніх продуктів на Agent SDK не використовується — тільки `ANTHROPIC_API_KEY`.
+Агент уміє:
 
-## Що всередині
+- **працювати з файлами й терміналом** — `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`
+  у межах своєї папки;
+- **ходити в інтернет** — `WebSearch` і `WebFetch` для швидкого пошуку та читання сторінок,
+  плюс **справжній браузер** через [Playwright MCP](https://github.com/microsoft/playwright-mcp):
+  33 інструменти — відкрити сторінку, клікнути, заповнити форму, залогінитись, зробити
+  скріншот або PDF;
+- **запускати n8n workflow** власним інструментом `trigger_workflow`.
+
+Оплата — **кредити Anthropic API** (platform.claude.com → Billing). Логін від claude.ai для
+сторонніх продуктів на Agent SDK не використовується, тільки `ANTHROPIC_API_KEY`.
+
+## Де він живе: папка агента
+
+Агенту виділяється одна папка на хості — вона монтується в контейнер як `/data` і є всім
+його світом. Поклади проєкт куди зручно, наприклад `/opt/claude-agent`:
 
 ```
-app/config.py   налаштування зі змінних оточення + валідація
-app/tools.py    власний інструмент trigger_workflow, відданий через in-process MCP-сервер SDK
-app/agent.py    обгортка над query(): сесія на чат, політика дозволів, ліміти
-app/bot.py      Telegram: whitelist, команди, індикатор роботи, розбиття довгих відповідей
-app/main.py     точка входу (long polling)
+/opt/claude-agent/                 # сюди кладеш цю папку (git clone або scp)
+├── .env                           # ключі й налаштування (не в git)
+├── docker-compose.yml
+├── Dockerfile
+├── app/
+└── data/                          # ←→ /data у контейнері, створиться на першому старті
+    ├── workspace/                 # cwd агента: тут він читає, пише, виконує команди
+    │   └── .playwright-mcp/       # снапшоти сторінок і скріншоти з браузера
+    ├── browser-profile/           # профіль Chromium: логіни й куки живуть між рестартами
+    ├── claude/                    # сесії Claude Code (щоб працював resume)
+    └── sessions.json              # мапа chat_id → session_id
 ```
 
-Потік одного повідомлення:
+`data/` — звичайна папка на хості, не прихований docker-том: її видно через `ls`, можна
+бекапити `tar`, можна покласти туди файли, і агент їх одразу побачить. Хочеш дати йому
+робочий репозиторій — розкоментуй у `docker-compose.yml` монтування:
 
+```yaml
+- ../workflows:/data/workspace/workflows:ro   # :ro = тільки читання
 ```
-Telegram → whitelist → ClaudeAgent.ask(chat_id, prompt)
-        → query(prompt, options) — агентний цикл SDK
-        → інструменти: Read/Glob/Grep/WebSearch/WebFetch/mcp__n8n__trigger_workflow
-        → ResultMessage (текст, вартість, кількість кроків) → відповідь у чат
-```
+
+За межі `/data` агент не бачить нічого: ані файлової системи хоста, ані інших контейнерів
+(крім n8n, якщо він у тій самій мережі). Хочеш дати ще один каталог — монтуй його явно.
+
+## Режими роботи
+
+`AGENT_MODE` у `.env`:
+
+| Режим | Поведінка |
+|---|---|
+| `sandbox` *(типово)* | Усі інструменти Claude Code без підтверджень. Межа — сам контейнер: усередині `/data` агент робить що завгодно, назовні не дістає |
+| `restricted` | Працюють тільки інструменти зі списку `ALLOWED_TOOLS`, решта отримує явну відмову. `Bash`/`Write`/`Edit` вимкнені |
+
+`sandbox` — те, заради чого це все: агент сам ставить пакети, пише скрипти, запускає їх,
+дивиться на помилку й переписує. Ціна в тому, що в межах `/data` він може й зіпсувати —
+тому там не має бути нічого, чого не шкода, а `data/` варто періодично бекапити.
+Якщо потрібен суворіший контроль — `restricted`.
 
 ## Швидкий старт
 
@@ -34,37 +67,55 @@ Telegram → whitelist → ClaudeAgent.ask(chat_id, prompt)
 2. **Токен бота** — @BotFather → `/newbot`.
 3. **Свій Telegram id** — @userinfobot.
 
-### Локально
-
 ```bash
-cd claude-agent-bot
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env    # заповни ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS
-set -a && source .env && set +a
-python -m app.main
-```
-
-SDK не читає `.env` сам — саме тому змінні експортуються в оточення процесу.
-
-### Docker (так і має жити на сервері)
-
-```bash
-cd claude-agent-bot
-cp .env.example .env     # відредагуй
+cd /opt/claude-agent            # там, де лежить docker-compose.yml
+cp .env.example .env            # заповни ANTHROPIC_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_USER_IDS
 docker compose up -d --build
 docker compose logs -f claude-agent-bot
 ```
 
-Разом з n8n у тій самій мережі:
+Перша збірка довга (~10 хв): тягнеться Node, Python, Playwright і Chromium; образ виходить
+приблизно на 1.5 ГБ. Разом із n8n у тій самій мережі:
 
 ```bash
 docker compose --profile n8n up -d --build
 ```
 
-Тоді в `.env` став `N8N_WEBHOOK_BASE_URL=http://n8n:5678` — контейнери бачать одне одного
-за іменем сервісу, а сам n8n назовні слухає тільки `127.0.0.1:5678`
-(за потреби заведи його через reverse proxy з TLS).
+Тоді в `.env` став `N8N_WEBHOOK_BASE_URL=http://n8n:5678` — контейнери бачать одне одного за
+іменем сервісу, а сам n8n назовні слухає лише `127.0.0.1:5678`.
+
+### Локально, без Docker
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env            # AGENT_WORKSPACE=./data/workspace
+set -a && source .env && set +a
+python -m app.main
+```
+
+SDK не читає `.env` сам — саме тому змінні експортуються в оточення процесу. Браузер
+підтягнеться через `npx` на першому виклику; щоб не чекати, постав заздалегідь:
+`npx -y @playwright/mcp@0.0.81 --help && npx playwright install chromium`.
+
+## Браузер
+
+Працює через Playwright MCP, інструменти видно як `mcp__playwright__browser_*`. Приклади
+задач, які агент виконує сам:
+
+> зайди в кабінет постачальника, вивантаж прайс і поклади у workspace
+
+> відкрий https://…/admin, знайди помилку 500 у логах на сторінці й покажи скріншот
+
+Агент бачить сторінку як **accessibility-снапшот** (структурований текст), а не як картинку,
+тому клікає за елементами надійно й не палить токени на скріншоти. Снапшоти й скріншоти
+лягають у `data/workspace/.playwright-mcp/` — звідти агент читає їх звичайним `Read`, і ти
+теж можеш туди зазирнути.
+
+`BROWSER_PERSIST_PROFILE=1` означає, що профіль Chromium зберігається в
+`data/browser-profile/`: залогінився один раз — сесія жива після рестарту. Поводься з цією
+папкою як із секретом, там лежать куки. Потрібна навпаки чистота — постав `0`, і кожен
+запуск буде з нуля.
 
 ## Змінні оточення
 
@@ -73,15 +124,23 @@ docker compose --profile n8n up -d --build
 | `ANTHROPIC_API_KEY` | — | Обов'язково. Ключ з Console, з нього списуються кредити |
 | `TELEGRAM_BOT_TOKEN` | — | Обов'язково. Токен від @BotFather |
 | `TELEGRAM_ALLOWED_USER_IDS` | — | Обов'язково. Хто має доступ, через кому. Без цього бот не стартує |
+| `AGENT_MODE` | `sandbox` | `sandbox` або `restricted` (див. вище) |
+| `ALLOWED_TOOLS` | див. `.env.example` | Білий список інструментів для `restricted` |
 | `CLAUDE_MODEL` | `claude-opus-5` | `claude-sonnet-5` або `claude-haiku-4-5` — дешевше |
 | `CLAUDE_EFFORT` | `medium` | Глибина міркувань: `low`…`max`. Прямо впливає на витрати |
 | `MAX_BUDGET_USD` | `0.50` | Стоп по оцінці вартості одного запиту |
 | `MAX_TURNS` | `20` | Стоп по кількості кроків агента |
-| `AGENT_WORKSPACE` | `/data/workspace` | Каталог, який агент бачить як робочий |
-| `ALLOWED_TOOLS` | див. `.env.example` | Білий список інструментів |
-| `SYSTEM_PROMPT` | укр. асистент | Системний промпт агента |
+| `AGENT_WORKSPACE` | `/data/workspace` | Робоча папка агента |
+| `SYSTEM_PROMPT` | укр. асистент | Системний промпт |
 | `SHOW_TOOL_TRACE` | `1` | Дописувати під відповіддю інструменти й вартість |
-| `N8N_WEBHOOK_BASE_URL` | порожньо | База n8n. Порожня — `trigger_workflow` повертає помилку |
+| `BROWSER_ENABLED` | `1` | Вимкни, якщо браузер не потрібен — мінус процеси й пам'ять |
+| `BROWSER_HEADLESS` | `1` | Без вікна. На сервері інакше й не буде |
+| `BROWSER_NO_SANDBOX` | `1` | Пісочниця chromium не піднімається під non-root у контейнері |
+| `BROWSER_PERSIST_PROFILE` | `1` | Зберігати логіни між рестартами |
+| `BROWSER_VIEWPORT` | `1280x720` | Розмір вікна |
+| `BROWSER_CAPS` | `vision,pdf` | Додаткові можливості: `vision`, `pdf`, `devtools` |
+| `BROWSER_MCP_COMMAND` | `npx` | У Docker перекрито на `playwright-mcp` (пакет уже в образі) |
+| `N8N_WEBHOOK_BASE_URL` | порожньо | База n8n. Порожня — `trigger_workflow` поверне помилку |
 | `N8N_WEBHOOK_TOKEN` | порожньо | Значення заголовка `Authorization` для Header Auth у n8n |
 | `LOG_LEVEL` | `INFO` | `DEBUG` покаже stderr CLI-процесу агента |
 
@@ -89,7 +148,7 @@ docker compose --profile n8n up -d --build
 
 - звичайний текст — задача агенту
 - `/reset` — забути контекст цього чату
-- `/status` — модель, ліміти, дозволені інструменти, поточна сесія
+- `/status` — режим, модель, ліміти, браузер, поточна сесія
 - `/help` — довідка
 
 ## Як це працює з n8n
@@ -99,27 +158,27 @@ docker compose --profile n8n up -d --build
 
 > запусти workflow new-lead з даними: email a@b.c, джерело — телеграм
 
-Агент викличе `mcp__n8n__trigger_workflow` з `webhook_path="webhook/new-lead"` і
-JSON-тілом, отримає відповідь n8n і перекаже її. Тестовий URL ноди — `webhook-test/...`,
+Агент викличе `mcp__n8n__trigger_workflow` з `webhook_path="webhook/new-lead"` і JSON-тілом,
+отримає відповідь n8n і перекаже її. Тестовий URL ноди — `webhook-test/...`,
 продакшн — `webhook/...`.
 
 Інструмент навмисно приймає **тільки відносний шлях**: повний URL, схема або `..`
 відхиляються, щоб промпт не міг відправити запит на чужий хост.
 
-## Модель безпеки
-
-Агент виконує інструменти на твоєму сервері, тому:
+## Межі й ризики
 
 - **Whitelist обов'язковий.** Порожній `TELEGRAM_ALLOWED_USER_IDS` — бот не стартує.
-- **Білий список інструментів.** Усе, чого немає в `ALLOWED_TOOLS`, отримує явну відмову
-  через колбек `can_use_tool` — у headless-режимі нема кому натискати «дозволити».
-- `Bash`, `Write`, `Edit` за замовчуванням вимкнені. Вмикай свідомо — це доступ на запис
-  і виконання команд у контейнері.
-- **Пісочниця.** `cwd` агента — `AGENT_WORKSPACE`, контейнер працює від non-root
-  користувача. Не монтуй туди чутливі каталоги; репозиторій зручно давати `:ro`.
-- **`setting_sources=[]`** — SDK не підтягує `~/.claude` і `.claude/` проєкту, конфіг бота
+  Хто в списку, той керує агентом; поводься з цим як із SSH-доступом до контейнера.
+- **Контейнер — єдина межа.** У `sandbox` агент виконує довільні команди всередині нього.
+  Не монтуй туди чутливі каталоги хоста, не клади в `.env` зайвих секретів, не давай
+  контейнеру доступу до docker-сокета.
+- **Non-root.** Процес працює під користувачем `agent` (uid 10001).
+- **`setting_sources=[]`** — SDK не підтягує `~/.claude` і `.claude/` проєкту; конфіг агента
   задається тільки змінними оточення.
-- Секрети — у `.env` (він у `.gitignore`), не у промпті й не в коді.
+- **Промпт-ін'єкції реальні.** Агент читає сторінки й файли; текст звідти може містити
+  інструкції. Тому межа папки й відсутність секретів усередині важливіші за будь-які
+  формулювання в системному промпті.
+- **Що бекапити:** `data/` цілком, окремо `.env`. Це весь стан сервісу.
 
 ## Гроші
 
@@ -129,6 +188,7 @@ JSON-тілом, отримає відповідь n8n і перекаже її.
 вимкненим, поки не зрозумієш реальне споживання.
 
 Дешевше: `CLAUDE_MODEL=claude-sonnet-5` або `claude-haiku-4-5`, `CLAUDE_EFFORT=low`.
+Робота з браузером дорожча за звичайний чат: кожен снапшот сторінки — це токени.
 
 ## Додати свій інструмент
 
@@ -141,9 +201,24 @@ async def create_invoice(args: dict[str, Any]) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": "Рахунок №123 створено"}]}
 ```
 
-Додай функцію у список `tools=[...]` у `create_sdk_mcp_server`, а ім'я
-`mcp__n8n__create_invoice` — в `ALLOWED_TOOLS`. Схема інструмента описується простим
-маппінгом типів; повертати треба `{"content": [...]}`, а на помилку — ще й `"is_error": True`.
+Додай функцію у список `tools=[...]` у `create_sdk_mcp_server`. У `restricted` ще й додай ім'я
+`mcp__n8n__create_invoice` в `ALLOWED_TOOLS`; у `sandbox` воно доступне одразу. Повертати
+треба `{"content": [...]}`, а на помилку — ще й `"is_error": True`.
+
+Зовнішній MCP-сервер (свій або чужий) підключається так само, як браузер у `app/browser.py`:
+конфіг `{"type": "stdio", "command": ..., "args": [...]}` у `mcp_servers`.
+
+## Тести
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+25 перевірок без мережі й без звернень до API: валідація конфігу, обидва режими дозволів,
+аргументи браузера, persistence сесій, інструмент n8n проти локального вебхука, розбиття
+повідомлень. Прогоняй після кожної правки `app/` — саме тут ловляться помилки в політиці
+дозволів.
 
 ## Діагностика
 
@@ -151,8 +226,10 @@ async def create_invoice(args: dict[str, Any]) -> dict[str, Any]:
 |---|---|
 | `Не задано ANTHROPIC_API_KEY` | Змінні не експортовані в оточення процесу (SDK не читає `.env`) |
 | `Invalid API key` / `Not logged in` | Ключ невірний або скінчились кредити в Console |
-| Агент пише, що інструмент вимкнено | Його немає в `ALLOWED_TOOLS` — додай свідомо |
-| `n8n відповів 404` | Workflow неактивний або шлях тестовий/продакшн переплутано |
+| `Chromium distribution 'chrome' is not found` | Загубився прапорець `--browser chromium`; MCP пішов шукати системний Google Chrome |
+| Браузер падає без пояснень | Мало `/dev/shm` — у compose має бути `shm_size: "1gb"` |
+| Агент пише, що інструмент вимкнено | Режим `restricted`, інструмента немає в `ALLOWED_TOOLS` |
+| `n8n відповів 404` | Workflow неактивний або переплутано тестовий/продакшн шлях |
 | Бот мовчить на повідомлення | Твого id немає в `TELEGRAM_ALLOWED_USER_IDS` — дивись логи |
 | Порожня відповідь | Досягнуто `MAX_BUDGET_USD` або `MAX_TURNS` — бот скаже це прямо |
 

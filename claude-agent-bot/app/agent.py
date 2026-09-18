@@ -22,8 +22,11 @@ from claude_agent_sdk import (
     query,
 )
 
+from .browser import MCP_SERVER_NAME as BROWSER_SERVER_NAME
+from .browser import build_playwright_server
 from .config import Settings
-from .tools import MCP_SERVER_NAME, build_n8n_server
+from .tools import MCP_SERVER_NAME as N8N_SERVER_NAME
+from .tools import build_n8n_server
 
 log = logging.getLogger(__name__)
 
@@ -46,10 +49,12 @@ class ClaudeAgent:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._mcp_servers = {MCP_SERVER_NAME: build_n8n_server(settings)}
+        self._settings.workspace.mkdir(parents=True, exist_ok=True)
+        self._mcp_servers: dict[str, Any] = {N8N_SERVER_NAME: build_n8n_server(settings)}
+        if settings.browser_enabled:
+            self._mcp_servers[BROWSER_SERVER_NAME] = build_playwright_server(settings)
         self._sessions: dict[int, str] = {}
         self._locks: dict[int, asyncio.Lock] = {}
-        self._settings.workspace.mkdir(parents=True, exist_ok=True)
         self._load_state()
 
     # --- стан сесій -------------------------------------------------------
@@ -111,14 +116,25 @@ class ClaudeAgent:
 
     def _options(self, chat_id: int) -> ClaudeAgentOptions:
         settings = self._settings
+        if settings.is_sandbox:
+            # Межа — сам контейнер: усередині нього агент користується всіма інструментами
+            # Claude Code без запитів на підтвердження.
+            permission_mode: str = "bypassPermissions"
+            allowed_tools: list[str] = []
+            can_use_tool = None
+        else:
+            permission_mode = "default"
+            allowed_tools = list(settings.allowed_tools)
+            can_use_tool = self._deny_unlisted
+
         return ClaudeAgentOptions(
             model=settings.model,
             effort=settings.effort,
             system_prompt=settings.system_prompt,
             cwd=str(settings.workspace),
-            allowed_tools=list(settings.allowed_tools),
-            can_use_tool=self._deny_unlisted,
-            permission_mode="default",
+            allowed_tools=allowed_tools,
+            can_use_tool=can_use_tool,
+            permission_mode=permission_mode,
             mcp_servers=self._mcp_servers,
             # Не підтягувати ~/.claude і .claude проєкту: конфіг бота задається тільки тут.
             setting_sources=[],
