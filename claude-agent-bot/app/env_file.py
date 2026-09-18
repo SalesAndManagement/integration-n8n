@@ -13,6 +13,9 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 QUOTES = ("'", '"')
+# Для цих значень «оточення сильніше за файл» — типова пастка: у сесії лишився
+# експорт старого ключа (`set -a; . ./.env`), і правки у файлі більше ні на що не впливають.
+SHADOW_WARN_KEYS = ("ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN")
 
 
 def find_duplicates(text: str) -> dict[str, int]:
@@ -92,6 +95,14 @@ def load_env_file(path: str | Path | None = None) -> int:
         if key not in os.environ:
             os.environ[key] = value
             loaded += 1
+        elif key in SHADOW_WARN_KEYS and os.environ[key] != value:
+            log.warning(
+                "%s узято з оточення, а не з %s — значення різні. "
+                "Якщо правив файл: unset %s і запусти знову.",
+                key,
+                env_path,
+                key,
+            )
     if loaded:
         log.info("Підвантажено %d змінних із %s", loaded, env_path)
     return loaded

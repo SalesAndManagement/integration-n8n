@@ -501,3 +501,30 @@ def test_duplicate_keys_are_reported(tmp_path):
     assert find_duplicates(text) == {"ANTHROPIC_API_KEY": 2}
     assert parse_env_file(text)["ANTHROPIC_API_KEY"] == "sk-ant-новий"  # останній
     assert find_duplicates("A=1\nB=2\n") == {}
+
+
+def test_shadowed_key_is_warned_about(tmp_path, monkeypatch, caplog):
+    """Експорт у сесії перекриває .env — мовчки правки файлу стають марними."""
+    from app.env_file import load_env_file
+
+    env_path = tmp_path / ".env"
+    env_path.write_text("ANTHROPIC_API_KEY=sk-ant-новий\n", encoding="utf-8")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-старий")
+
+    with caplog.at_level("WARNING"):
+        load_env_file(env_path)
+
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-старий"  # оточення сильніше
+    assert "unset ANTHROPIC_API_KEY" in caplog.text
+
+
+def test_same_value_in_environment_is_not_warned(tmp_path, monkeypatch, caplog):
+    from app.env_file import load_env_file
+
+    env_path = tmp_path / ".env"
+    env_path.write_text("ANTHROPIC_API_KEY=sk-ant-той-самий\n", encoding="utf-8")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-той-самий")
+
+    with caplog.at_level("WARNING"):
+        load_env_file(env_path)
+    assert "unset" not in caplog.text

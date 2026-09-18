@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.agent import ClaudeAgent  # noqa: E402
 from app.config import ConfigError, Settings  # noqa: E402
-from app.env_file import find_duplicates, load_env_file  # noqa: E402
+from app.env_file import find_duplicates, load_env_file, parse_env_file  # noqa: E402
 
 BOLD = "\033[1m"
 RED = "\033[31m"
@@ -46,21 +46,29 @@ def mask(value: str) -> str:
     return f"{value[:24]}…{value[-4:]} ({len(value)} символів)" if len(value) > 30 else "(порожньо або обрізаний)"
 
 
-def check_env_file() -> None:
-    """Дублікат рядка в .env — часта причина «я ж замінив ключ, а він старий»."""
+def check_env_file(before: dict[str, str]) -> None:
+    """Дві причини «я ж замінив ключ, а він старий»: дублікат рядка і експорт у сесії."""
     path = pathlib.Path(".env")
     if not path.is_file():
         note(".env не знайдено поруч — беру лише змінні оточення")
         return
-    duplicates = find_duplicates(path.read_text(encoding="utf-8"))
-    for key, count in duplicates.items():
+
+    text = path.read_text(encoding="utf-8")
+    for key, count in find_duplicates(text).items():
         bad(f"у .env {count} рядки з {key} — діє ОСТАННІЙ. Прибери зайві:")
         print(f"      grep -n '^{key}=' .env")
 
+    # Оточення сильніше за файл: старий експорт у сесії робить правки у .env марними.
+    for key, value in parse_env_file(text).items():
+        if key in before and before[key] != value:
+            bad(f"{key} береться з оточення сесії, а НЕ з .env — значення різні.")
+            print(f"      Виправити:  unset {key}")
+            print("      Або запусти з чистої сесії: exec bash -l")
 
-def check_settings() -> Settings | None:
+
+def check_settings(before: dict[str, str]) -> Settings | None:
     head("1. Налаштування")
-    check_env_file()
+    check_env_file(before)
     try:
         settings = Settings.from_env()
     except ConfigError as exc:
@@ -224,9 +232,11 @@ async def check_browser(settings: Settings) -> None:
 
 async def main() -> int:
     print(f"{BOLD}Перевірка агента{OFF}")
+    # Знімок до завантаження: показує, що вже стояло в оточенні й перекриє файл.
+    before = dict(os.environ)
     load_env_file()
 
-    settings = check_settings()
+    settings = check_settings(before)
     if settings is None:
         return 1
 
