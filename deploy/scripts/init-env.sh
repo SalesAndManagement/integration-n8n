@@ -11,10 +11,39 @@ cd "$(dirname "$0")/.."
 DOMAIN="${1:-}"
 EMAIL="${2:-}"
 
+# Чи є вже ініціалізовані томи? Якщо так, секрети МІНЯТИ НЕ МОЖНА:
+# ключ шифрування зашитий у /home/node/.n8n/config, паролі — у томі postgres.
+STACK_EXISTS=0
+if docker volume ls -q --filter label=com.docker.compose.project=n8n 2>/dev/null | grep -q .; then
+  STACK_EXISTS=1
+fi
+
+KEEP_SECRETS=0
 if [ -f .env ]; then
   echo "Файл .env вже існує."
-  read -r -p "Перезаписати? Поточні секрети буде збережено в .env.bak [yes/NO] " a
-  [ "$a" = "yes" ] || { echo "Скасовано."; exit 1; }
+  if [ "$STACK_EXISTS" -eq 1 ]; then
+    cat <<'WARN'
+
+⚠ Стек уже запускався: томи postgres/n8n створені.
+   Перегенерація секретів ЗЛАМАЄ його — n8n не зможе ані розшифрувати
+   свої дані (mismatching encryption key), ані зайти в базу (password
+   authentication failed).
+
+   1) залишити секрети, змінити лише домен і пошту   ← безпечно
+   2) перегенерувати все (знадобиться очистити дані: ./scripts/reset-data.sh)
+
+WARN
+    read -r -p "Ваш вибір [1/2, Enter = 1]: " choice
+    case "${choice:-1}" in
+      1) KEEP_SECRETS=1 ;;
+      2) KEEP_SECRETS=0
+         echo "Секрети буде перегенеровано. Після цього обов'язково: ./scripts/reset-data.sh" ;;
+      *) echo "Незрозуміла відповідь — скасовано."; exit 1 ;;
+    esac
+  else
+    read -r -p "Перезаписати? [yes/NO] " a
+    [ "$a" = "yes" ] || { echo "Скасовано."; exit 1; }
+  fi
   cp .env ".env.bak.$(date +%Y%m%d-%H%M%S)"
 fi
 
@@ -41,12 +70,25 @@ while [ -z "$EMAIL" ]; do
   read -r -p "Пошта для Let's Encrypt: " EMAIL
 done
 
+# зчитати наявні секрети ДО перезапису файлу
+if [ "$KEEP_SECRETS" -eq 1 ]; then
+  OLD_PG_PW="$(grep -m1 '^POSTGRES_PASSWORD=' .env | cut -d= -f2-)"
+  OLD_PG_APP_PW="$(grep -m1 '^POSTGRES_NON_ROOT_PASSWORD=' .env | cut -d= -f2-)"
+  OLD_KEY="$(grep -m1 '^N8N_ENCRYPTION_KEY=' .env | cut -d= -f2-)"
+fi
+
 cp .env.example .env
 
-# hex, а не base64: жодних символів, які треба екранувати у .env
-POSTGRES_PASSWORD="$(openssl rand -hex 24)"
-POSTGRES_NON_ROOT_PASSWORD="$(openssl rand -hex 24)"
-N8N_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+if [ "$KEEP_SECRETS" -eq 1 ]; then
+  POSTGRES_PASSWORD="$OLD_PG_PW"
+  POSTGRES_NON_ROOT_PASSWORD="$OLD_PG_APP_PW"
+  N8N_ENCRYPTION_KEY="$OLD_KEY"
+else
+  # hex, а не base64: жодних символів, які треба екранувати у .env
+  POSTGRES_PASSWORD="$(openssl rand -hex 24)"
+  POSTGRES_NON_ROOT_PASSWORD="$(openssl rand -hex 24)"
+  N8N_ENCRYPTION_KEY="$(openssl rand -hex 32)"
+fi
 
 # розмір пулу з'єднань за кількістю ядер
 CORES="$(nproc 2>/dev/null || echo 2)"
@@ -87,7 +129,7 @@ cat <<MSG
 
   Домен .................. $DOMAIN
   Пошта Let's Encrypt .... $EMAIL
-  Паролі БД .............. згенеровано
+  Паролі БД .............. $([ "$KEEP_SECRETS" -eq 1 ] && echo "збережено наявні" || echo "згенеровано")
   Пул з'єднань ........... $POOL  (ядер: $CORES)
 
 ┌───────────────────────────────────────────────────────────────┐

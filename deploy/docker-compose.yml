@@ -19,7 +19,7 @@ x-n8n-env: &n8n-env
   N8N_PORT: 5678
   N8N_PROTOCOL: https
   N8N_EDITOR_BASE_URL: https://${N8N_DOMAIN}
-  WEBHOOK_URL: https://${N8N_DOMAIN}/
+  N8N_WEBHOOK_URL: https://${N8N_DOMAIN}/
   N8N_PROXY_HOPS: 1
   N8N_SECURE_COOKIE: "true"
 
@@ -40,7 +40,6 @@ x-n8n-env: &n8n-env
   N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
   N8N_DIAGNOSTICS_ENABLED: ${N8N_DIAGNOSTICS_ENABLED:-false}
   N8N_VERSION_NOTIFICATIONS_ENABLED: "true"
-  N8N_RUNNERS_ENABLED: "true"
   N8N_LOG_LEVEL: ${N8N_LOG_LEVEL:-info}
 
   # --- Черга (вмикається профілем queue) ---
@@ -51,7 +50,7 @@ x-n8n-env: &n8n-env
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:${POSTGRES_IMAGE_TAG:-17}-alpine
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}

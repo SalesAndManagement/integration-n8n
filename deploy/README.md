@@ -187,6 +187,7 @@ docker compose restart n8n
 | Оновлення n8n | `./scripts/update.sh` |
 | Бекап | `./scripts/backup.sh` |
 | Відновлення | `./scripts/restore.sh backups/n8n-db-<дата>.dump` |
+| Скинути дані начисто | `./scripts/reset-data.sh` |
 | Зупинка | `docker compose down` (дані у volume лишаються) |
 
 ### Бекап за розкладом
@@ -249,5 +250,16 @@ docker compose exec postgres psql -U postgres -c "ALTER USER n8n WITH PASSWORD '
 **Webhook-адреси показують localhost** — не заповнений `N8N_DOMAIN`;
 виправте `.env` і `docker compose up -d`.
 
-**«Your credentials cannot be decrypted»** — змінився `N8N_ENCRYPTION_KEY`.
-Поверніть старий ключ у `.env` і перезапустіть.
+**«Mismatching encryption keys»,  n8n у циклі рестартів, Caddy віддає 502** —
+`N8N_ENCRYPTION_KEY` у `.env` не той, з яким n8n створив `/home/node/.n8n/config`.
+Класично трапляється, якщо перезапустити `init-env.sh` на вже піднятому стеку.
+Два виходи:
+
+* повернути старий ключ — він лежить у резервній копії: `grep N8N_ENCRYPTION_KEY .env.bak.*`
+  (разом з ним поверніть і паролі БД — вони теж зашиті в том postgres);
+* якщо даних ще немає — почати з чистого аркуша: `./scripts/reset-data.sh`
+  (видаляє томи бази й `.n8n`, сертифікати Caddy зберігає).
+
+**Postgres не стартує після оновлення образу** — том створено на старій версії.
+Зафіксуйте попередню в `.env`: `POSTGRES_IMAGE_TAG=16`, або зробіть дамп,
+`./scripts/reset-data.sh` і відновіть його через `./scripts/restore.sh`.
