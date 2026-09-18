@@ -99,12 +99,55 @@ def check_api(settings: Settings) -> bool:
 
     bad(response.text[:600])
     if response.status_code == 400 and "not scoped to a workspace" in response.text:
-        note("ключ рівня організації — впиши ANTHROPIC_WORKSPACE_ID або перевипусти ключ у workspace")
+        note("ключ рівня організації — йому потрібен id workspace")
+        suggest_workspaces(headers["x-api-key"])
     elif response.status_code == 401:
         note("ключ невірний або відкликаний")
     elif response.status_code == 429:
         note("ліміт запитів або скінчились кредити")
     return False
+
+
+def suggest_workspaces(api_key: str) -> None:
+    """Ключ рівня організації приймається Admin API — спитаємо в нього список workspace.
+
+    Default Workspace у цьому списку не показується (так задумано), тому якщо
+    список порожній, простіше створити окремий workspace для агента.
+    """
+    import httpx
+
+    headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+    try:
+        response = httpx.get(
+            "https://api.anthropic.com/v1/organizations/workspaces",
+            headers=headers,
+            params={"limit": 20},
+            timeout=30,
+        )
+    except httpx.HTTPError as exc:
+        note(f"не вдалося спитати список workspace: {exc}")
+        return
+
+    if not response.is_success:
+        note(f"Admin API відповів {response.status_code}: {response.text[:200]}")
+        note("Створи workspace у Console -> Settings -> Workspaces і візьми його id")
+        return
+
+    items = response.json().get("data", [])
+    if items:
+        print("    доступні workspace:")
+        for item in items:
+            print(f"      {item.get('id')}  {item.get('name')}")
+        print(f"\n    Впиши в .env:  ANTHROPIC_WORKSPACE_ID={items[0].get('id')}")
+        return
+
+    note("жодного окремого workspace немає (Default у списку не показується)")
+    print("    Створи його однією командою — id буде у відповіді:")
+    print(
+        '      curl -sS -X POST https://api.anthropic.com/v1/organizations/workspaces \\\n'
+        '        -H "x-api-key: $ANTHROPIC_API_KEY" -H "anthropic-version: 2023-06-01" \\\n'
+        '        -H "content-type: application/json" -d \'{"name": "Agent"}\''
+    )
 
 
 async def check_agent(settings: Settings) -> bool:
