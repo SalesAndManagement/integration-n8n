@@ -84,19 +84,43 @@ docker compose --profile n8n up -d --build
 Тоді в `.env` став `N8N_WEBHOOK_BASE_URL=http://n8n:5678` — контейнери бачать одне одного за
 іменем сервісу, а сам n8n назовні слухає лише `127.0.0.1:5678`.
 
-### Локально, без Docker
+### Без root і без Docker
+
+Якщо на сервері немає sudo або `docker ps` каже `permission denied` — усе ставиться в
+домашню папку:
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env            # AGENT_WORKSPACE=./data/workspace
-set -a && source .env && set +a
-python -m app.main
+./scripts/setup-native.sh     # venv + залежності + Playwright MCP + chromium
+nano .env                     # ключі
+./scripts/run-native.sh       # запуск
 ```
 
-SDK не читає `.env` сам — саме тому змінні експортуються в оточення процесу. Браузер
-підтягнеться через `npx` на першому виклику; щоб не чекати, постав заздалегідь:
-`npx -y @playwright/mcp@0.0.81 --help && npx playwright install chromium`.
+Скрипт нічого не чіпає поза цією папкою та `~/.cache/ms-playwright`, сам проставляє шляхи
+в `.env` і перевіряє, чи запуститься chromium: системні бібліотеки для нього ставляться
+через apt, тобто потребують root. Якщо чогось бракує — він назве конкретні `.so`, поставить
+`BROWSER_ENABLED=0` і піде далі. `WebSearch` і `WebFetch` працюють без браузера, тож агент
+лишається робочим; коли з'явиться root, досить одного разу виконати
+`sudo npx playwright install-deps chromium` і повернути `BROWSER_ENABLED=1`.
+
+Немає Node — скрипт скаже, як поставити його без root через `nvm`.
+
+Тримати процес живим без systemd:
+
+```bash
+# найпростіше
+nohup ./scripts/run-native.sh > data/bot.log 2>&1 &
+
+# автостарт після перезавантаження, без root
+crontab -e
+@reboot cd ~/integration-n8n/claude-agent-bot && ./scripts/run-native.sh >> data/bot.log 2>&1
+```
+
+Якщо на сервері дозволені user-юніти systemd — надійніше через них:
+`systemctl --user enable --now claude-agent-bot` (юніт треба створити самому,
+`ExecStart=%h/integration-n8n/claude-agent-bot/scripts/run-native.sh`).
+
+`.env` сервіс читає сам (`app/env_file.py`) — `source .env` не потрібен і не рекомендується:
+на значеннях із пробілами, як `SYSTEM_PROMPT`, він ламається.
 
 ## Браузер
 
@@ -140,6 +164,7 @@ SDK не читає `.env` сам — саме тому змінні експо�
 | `BROWSER_VIEWPORT` | `1280x720` | Розмір вікна |
 | `BROWSER_CAPS` | `vision,pdf` | Додаткові можливості: `vision`, `pdf`, `devtools` |
 | `BROWSER_MCP_COMMAND` | `npx` | У Docker перекрито на `playwright-mcp` (пакет уже в образі) |
+| `BROWSER_MCP_CLI` | порожньо | Шлях до `cli.js` при встановленні без root; проставляє `setup-native.sh` |
 | `N8N_WEBHOOK_BASE_URL` | порожньо | База n8n. Порожня — `trigger_workflow` поверне помилку |
 | `N8N_WEBHOOK_TOKEN` | порожньо | Значення заголовка `Authorization` для Header Auth у n8n |
 | `LOG_LEVEL` | `INFO` | `DEBUG` покаже stderr CLI-процесу агента |
@@ -227,6 +252,8 @@ python -m pytest
 | `Не задано ANTHROPIC_API_KEY` | Змінні не експортовані в оточення процесу (SDK не читає `.env`) |
 | `Invalid API key` / `Not logged in` | Ключ невірний або скінчились кредити в Console |
 | `Chromium distribution 'chrome' is not found` | Загубився прапорець `--browser chromium`; MCP пішов шукати системний Google Chrome |
+| `error while loading shared libraries: lib…so` | Немає системних бібліотек chromium. Ставляться тільки з root: `sudo npx playwright install-deps chromium` |
+| `permission denied … docker.sock` | Юзер не в групі `docker`. Без root — став через `scripts/setup-native.sh` |
 | Браузер падає без пояснень | Мало `/dev/shm` — у compose має бути `shm_size: "1gb"` |
 | Агент пише, що інструмент вимкнено | Режим `restricted`, інструмента немає в `ALLOWED_TOOLS` |
 | `n8n відповів 404` | Workflow неактивний або переплутано тестовий/продакшн шлях |

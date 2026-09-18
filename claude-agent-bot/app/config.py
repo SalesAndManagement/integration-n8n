@@ -80,6 +80,7 @@ class Settings:
     browser_caps: str
     browser_mcp_command: str
     browser_mcp_package: str
+    browser_mcp_cli: str
 
     @property
     def is_sandbox(self) -> bool:
@@ -140,4 +141,5 @@ class Settings:
             browser_mcp_command=os.getenv("BROWSER_MCP_COMMAND", "npx").strip() or "npx",
             browser_mcp_package=os.getenv("BROWSER_MCP_PACKAGE", DEFAULT_BROWSER_PACKAGE).strip()
             or DEFAULT_BROWSER_PACKAGE,
+            browser_mcp_cli=os.getenv("BROWSER_MCP_CLI", "").strip(),
         )

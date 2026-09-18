@@ -9,6 +9,7 @@ import sys
 from .agent import ClaudeAgent
 from .bot import TelegramBot
 from .config import ConfigError, Settings
+from .env_file import load_env_file
 
 
 def configure_logging() -> None:
@@ -22,6 +23,10 @@ def configure_logging() -> None:
 def main() -> int:
     configure_logging()
     log = logging.getLogger("claude-agent-bot")
+
+    # Запуск без Docker: беремо значення з .env поруч із проєктом.
+    # Змінні, задані в оточенні (як у контейнері), мають пріоритет.
+    load_env_file()
 
     try:
         settings = Settings.from_env()

@@ -162,6 +162,16 @@ def test_browser_isolated_and_headed(env):
     assert "--headless" not in config["args"]
 
 
+def test_browser_from_local_install(env, tmp_path):
+    """Встановлення без root: cli.js лежить у домашній папці, запускаємо через node."""
+    cli = tmp_path / "node_modules" / "@playwright" / "mcp" / "cli.js"
+    env.setenv("BROWSER_MCP_CLI", str(cli))
+    config = build_playwright_server(Settings.from_env())
+    assert config["command"] == "node"
+    assert config["args"][0] == str(cli)
+    assert "--browser" in config["args"] and "--headless" in config["args"]
+
+
 def test_browser_can_be_disabled(env):
     env.setenv("BROWSER_ENABLED", "0")
     options = ClaudeAgent(Settings.from_env())._options(chat_id=1)
@@ -270,3 +280,53 @@ def test_format_reply_footer():
     assert "🔧 Read, Bash" in formatted  # без дублікатів
     assert "0.0123" in formatted
     assert format_reply(reply, show_trace=False) == "готово"
+
+
+# --- читання .env ---------------------------------------------------------
+
+
+def test_parse_env_file_handles_real_world_lines():
+    from app.env_file import parse_env_file
+
+    parsed = parse_env_file(
+        "\n".join(
+            [
+                "# коментар",
+                "",
+                "ANTHROPIC_API_KEY=sk-ant-123",
+                "export TELEGRAM_BOT_TOKEN=111:AA",
+                # значення з пробілами й кирилицею — саме на цьому ламався `source .env`
+                "SYSTEM_PROMPT=Ти — робочий асистент. Відповідай стисло.",
+                'QUOTED="у лапках"',
+                "EMPTY=",
+                "BASE_URL=http://n8n:5678/webhook?a=1&b=2",
+                "сміття без знаку рівності",
+            ]
+        )
+    )
+    assert parsed["ANTHROPIC_API_KEY"] == "sk-ant-123"
+    assert parsed["TELEGRAM_BOT_TOKEN"] == "111:AA"
+    assert parsed["SYSTEM_PROMPT"] == "Ти — робочий асистент. Відповідай стисло."
+    assert parsed["QUOTED"] == "у лапках"
+    assert parsed["EMPTY"] == ""
+    assert parsed["BASE_URL"] == "http://n8n:5678/webhook?a=1&b=2"
+    assert "сміття без знаку рівності" not in parsed
+
+
+def test_load_env_file_does_not_override_environment(tmp_path, monkeypatch):
+    from app.env_file import load_env_file
+
+    env_path = tmp_path / ".env"
+    env_path.write_text("FROM_FILE=file\nALREADY_SET=file\n", encoding="utf-8")
+    monkeypatch.setenv("ALREADY_SET", "environment")
+
+    assert load_env_file(env_path) == 1
+    assert os.environ["FROM_FILE"] == "file"
+    # У Docker значення приходять з environment — файл не має їх перетирати.
+    assert os.environ["ALREADY_SET"] == "environment"
+
+
+def test_load_env_file_missing_is_not_an_error(tmp_path):
+    from app.env_file import load_env_file
+
+    assert load_env_file(tmp_path / "нема.env") == 0

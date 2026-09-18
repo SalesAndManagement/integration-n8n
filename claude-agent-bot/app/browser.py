@@ -41,8 +41,14 @@ def build_playwright_server(settings: Settings) -> dict[str, Any]:
     else:
         flags.append("--isolated")
 
-    command = settings.browser_mcp_command
-    args = ["-y", settings.browser_mcp_package, *flags] if command == "npx" else flags
+    if settings.browser_mcp_cli:
+        # Встановлення без root: пакет лежить у домашній папці, запускаємо його cli.js напряму.
+        command, args = "node", [settings.browser_mcp_cli, *flags]
+    elif settings.browser_mcp_command == "npx":
+        command, args = "npx", ["-y", settings.browser_mcp_package, *flags]
+    else:
+        # Пакет уже в PATH (глобальний npm install у Docker-образі).
+        command, args = settings.browser_mcp_command, flags
 
     log.info("Playwright MCP: %s %s", command, " ".join(args))
     return {"type": "stdio", "command": command, "args": args, "env": {}}
