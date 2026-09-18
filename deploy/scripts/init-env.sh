@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Створює .env із .env.example: генерує всі секрети, питає домен і пошту.
 # Використання:
-#   ./scripts/init-env.sh                          # інтерактивно
+#   ./scripts/init-env.sh                          # інтерактивно, з підказкою домену
+#   ./scripts/init-env.sh auto me@mail.com         # домен підібрати автоматично
 #   ./scripts/init-env.sh n8n.mydomain.com me@mail.com
 set -euo pipefail
 
@@ -15,6 +16,22 @@ if [ -f .env ]; then
   read -r -p "Перезаписати? Поточні секрети буде збережено в .env.bak [yes/NO] " a
   [ "$a" = "yes" ] || { echo "Скасовано."; exit 1; }
   cp .env ".env.bak.$(date +%Y%m%d-%H%M%S)"
+fi
+
+# "auto" — підібрати домен автоматично (хостнейм провайдера або sslip.io)
+if [ "$DOMAIN" = "auto" ] || [ "$DOMAIN" = "--auto" ]; then
+  DOMAIN="$(./scripts/detect-domain.sh --quiet)" || {
+    echo "Автопідбір домену не вдався — вкажіть домен вручну."; exit 1; }
+  echo "Автоматично підібрано домен: $DOMAIN"
+fi
+
+if [ -z "$DOMAIN" ]; then
+  SUGGESTED="$(./scripts/detect-domain.sh --quiet 2>/dev/null || true)"
+  if [ -n "$SUGGESTED" ]; then
+    echo "Доступний безкоштовний домен для цього сервера: $SUGGESTED"
+    read -r -p "Домен для n8n [Enter = $SUGGESTED]: " DOMAIN
+    DOMAIN="${DOMAIN:-$SUGGESTED}"
+  fi
 fi
 
 while [ -z "$DOMAIN" ]; do

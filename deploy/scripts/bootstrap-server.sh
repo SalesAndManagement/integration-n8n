@@ -12,7 +12,7 @@ log "Оновлення системи"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get upgrade -y -qq
-apt-get install -y -qq ca-certificates curl gnupg ufw fail2ban unattended-upgrades
+apt-get install -y -qq ca-certificates curl gnupg ufw fail2ban unattended-upgrades dnsutils
 
 log "Часовий пояс -> ${TIMEZONE:-Europe/Warsaw}"
 timedatectl set-timezone "${TIMEZONE:-Europe/Warsaw}"
